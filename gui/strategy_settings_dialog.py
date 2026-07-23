@@ -16,6 +16,13 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from gui.styles import Theme, SCENE_COLORS, SCENE_INFO
 from config import Config
 from utils.settings_store import load_json_settings, save_json_settings
+from utils.parameter_units import (
+    CURRENT_PARAMETER_SCHEMA,
+    STRATEGY_PERCENT_FIELDS,
+    migrate_strategy_settings,
+    percent_to_ratio,
+    ratio_to_percent,
+)
 
 SETTINGS_PATH = Config.PREFERENCES_DIR / "strategies.json"
 LEGACY_SETTINGS_PATH = Path.home() / ".bn_trader_strategies.json"
@@ -24,43 +31,53 @@ DEFAULT_PARAMS = {
     "TRENDING": {
         "enabled": True, "fast_ma": 5, "slow_ma": 20,
         "macd_fast": 12, "macd_slow": 26, "macd_signal": 9,
-        "adx_threshold": 25, "stop_loss_pct": 2.0,
-        "take_profit_pct": 5.0, "trailing_stop": 1.5,
+        "adx_threshold": 25, "stop_loss_pct": 0.02,
+        "take_profit_pct": 0.05, "trailing_stop": 0.015,
     },
     "RANGING": {
         "enabled": True, "bb_period": 20, "bb_std": 2.0,
         "rsi_period": 14, "rsi_oversold": 30, "rsi_overbought": 70,
-        "stop_loss_pct": 3.0, "take_profit_pct": 3.0,
+        "stop_loss_pct": 0.03, "take_profit_pct": 0.03,
     },
     "BREAKOUT": {
         "enabled": True, "lookback": 20, "volume_threshold": 1.5,
-        "breakout_pct": 0.8, "atr_period": 14, "atr_filter": 1.5,
-        "stop_loss_pct": 1.5, "risk_reward": 2.0,
+        "breakout_pct": 0.008, "atr_period": 14, "atr_filter": 1.5,
+        "stop_loss_pct": 0.015, "risk_reward": 2.0,
     },
     "REVERSAL": {
         "enabled": False,
         "rsi_period": 14, "rsi_oversold": 25, "rsi_overbought": 75,
         "divergence_lookback": 10, "min_rsi_divergence": 5,
-        "stop_loss_pct": 2.0, "take_profit_pct": 4.0,
+        "stop_loss_pct": 0.02, "take_profit_pct": 0.04,
     },
     "EXTREME": {
         "enabled": False,
         "atr_multiplier": 3.0, "volume_spike": 3.0,
-        "hold_time": 300, "stop_loss_pct": 1.0, "take_profit_pct": 2.0,
+        "hold_time": 300, "stop_loss_pct": 0.01, "take_profit_pct": 0.02,
     },
 }
 
 
 def load_strategy_settings() -> dict:
-    return load_json_settings(
+    data = load_json_settings(
         SETTINGS_PATH,
-        DEFAULT_PARAMS,
+        {
+            **DEFAULT_PARAMS,
+            "_schema_version": CURRENT_PARAMETER_SCHEMA,
+        },
         legacy_paths=[LEGACY_SETTINGS_PATH],
     )
+    migrated, changed = migrate_strategy_settings(data)
+    if changed:
+        save_json_settings(SETTINGS_PATH, migrated)
+    return migrated
 
 
 def save_strategy_settings(settings: dict):
-    save_json_settings(SETTINGS_PATH, settings)
+    save_json_settings(SETTINGS_PATH, {
+        **settings,
+        "_schema_version": CURRENT_PARAMETER_SCHEMA,
+    })
 
 
 def _param_label(key: str) -> str:
@@ -139,7 +156,7 @@ class StrategyParamPanel(QWidget):
                 for index, key in enumerate(keys):
                     if key not in params:
                         continue
-                    sp = self._make_spin(params[key])
+                    sp = self._make_spin(key, params[key])
                     row = index // 3 + 1
                     col = (index % 3) * 2
                     fl.addWidget(QLabel(_param_label(key)), row, col)
@@ -156,7 +173,7 @@ class StrategyParamPanel(QWidget):
                 fl = QGridLayout(card)
                 fl.setContentsMargins(14, 14, 14, 10)
                 for index, key in enumerate(leftover):
-                    sp = self._make_spin(params[key])
+                    sp = self._make_spin(key, params[key])
                     row = index // 3
                     col = (index % 3) * 2
                     fl.addWidget(QLabel(_param_label(key)), row, col)
@@ -175,7 +192,7 @@ class StrategyParamPanel(QWidget):
             for index, (key, val) in enumerate(visible):
                 if key == "enabled":
                     continue
-                sp = self._make_spin(val)
+                sp = self._make_spin(key, val)
                 row = index // 3
                 col = (index % 3) * 2
                 fl.addWidget(QLabel(_param_label(key)), row, col)
@@ -185,8 +202,15 @@ class StrategyParamPanel(QWidget):
 
         layout.addStretch()
 
-    def _make_spin(self, val):
-        if isinstance(val, float) and val < 10:
+    def _make_spin(self, key, val):
+        if key in STRATEGY_PERCENT_FIELDS:
+            sp = QDoubleSpinBox()
+            sp.setRange(0.01, 100)
+            sp.setDecimals(2)
+            sp.setSuffix(" %")
+            sp.setValue(ratio_to_percent(val))
+            sp.setSingleStep(0.1)
+        elif isinstance(val, float) and val < 10:
             sp = QDoubleSpinBox()
             sp.setRange(0.1, 1000)
             sp.setDecimals(2)
@@ -207,14 +231,22 @@ class StrategyParamPanel(QWidget):
     def get_values(self) -> dict:
         vals = {"enabled": self._enabled_cb.isChecked()}
         for key, widget in self._fields.items():
-            vals[key] = widget.value()
+            value = widget.value()
+            vals[key] = (
+                percent_to_ratio(value)
+                if key in STRATEGY_PERCENT_FIELDS else value
+            )
         return vals
 
     def set_values(self, data: dict):
         self._enabled_cb.setChecked(data.get("enabled", True))
         for key, widget in self._fields.items():
             if key in data:
-                widget.setValue(data[key])
+                value = data[key]
+                widget.setValue(
+                    ratio_to_percent(value)
+                    if key in STRATEGY_PERCENT_FIELDS else value
+                )
 
 
 class StrategySettingsPage(QWidget):

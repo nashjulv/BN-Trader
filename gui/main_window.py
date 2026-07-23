@@ -59,6 +59,7 @@ from services.automation_manager import (
     AutomationManager, RUNNING, EVALUATING
 )
 from services.automation_worker import AutomationEvaluationWorker
+from utils.parameter_units import strategy_runtime_params
 from strategies.base import SignalType
 
 from indicators.technical import calculate_all_indicators
@@ -805,12 +806,7 @@ class MainWindow(QMainWindow):
         for scene_type, strategy in self.strategy_engine.strategies.items():
             values = settings.get(scene_type)
             if isinstance(values, dict):
-                sp = {}
-                for k, v in values.items():
-                    if k == "enabled":
-                        continue
-                    sp[k] = v / 100.0 if k.endswith("_pct") and v > 1 else v
-                strategy.set_params(**sp)
+                strategy.set_params(**strategy_runtime_params(values))
 
     def _on_mode_changed(self, auto: bool):
         if auto and not self._strategy_configured:

@@ -35,6 +35,7 @@ from services.automation_manager import (
     ERROR,
     RUNNING,
 )
+from utils.parameter_units import percent_to_ratio, ratio_to_percent
 
 
 STRATEGY_LABELS = {
@@ -79,7 +80,7 @@ class AutomationTaskDialog(QDialog):
             self.direction.addItem(label, key)
 
         self.per_trade = QDoubleSpinBox()
-        self.per_trade.setRange(1, 100)
+        self.per_trade.setRange(0.1, 100)
         self.per_trade.setSuffix(" %")
         self.per_trade.setDecimals(1)
         self.interval = QSpinBox()
@@ -127,7 +128,7 @@ class AutomationTaskDialog(QDialog):
             self.direction.setCurrentIndex(
                 self.direction.findData(task.direction)
             )
-            self.per_trade.setValue(task.per_trade_ratio * 100)
+            self.per_trade.setValue(ratio_to_percent(task.per_trade_ratio))
             self.interval.setValue(task.interval_seconds)
             self.daily_limit.setValue(task.max_trades_per_day)
         else:
@@ -151,7 +152,7 @@ class AutomationTaskDialog(QDialog):
             "timeframe": self.timeframe.currentText(),
             "strategy": self.strategy.currentData(),
             "direction": self.direction.currentData(),
-            "per_trade_ratio": self.per_trade.value() / 100,
+            "per_trade_ratio": percent_to_ratio(self.per_trade.value()),
             "interval_seconds": self.interval.value(),
             "max_trades_per_day": self.daily_limit.value(),
         }
@@ -189,7 +190,7 @@ class AllocationDialog(QDialog):
         self.ratio.setRange(0.1, 100)
         self.ratio.setDecimals(1)
         self.ratio.setSuffix(" %")
-        self.ratio.setValue(ratio * 100)
+        self.ratio.setValue(ratio_to_percent(ratio))
         self.enabled = QCheckBox("参与自动化投资")
         self.enabled.setChecked(enabled)
 
@@ -215,7 +216,7 @@ class AllocationDialog(QDialog):
     def values(self) -> dict:
         return {
             "symbol": self.symbol.currentText(),
-            "allocation_ratio": self.ratio.value() / 100,
+            "allocation_ratio": percent_to_ratio(self.ratio.value()),
             "enabled": self.enabled.isChecked(),
         }
 

@@ -15,6 +15,13 @@ from PyQt6.QtCore import pyqtSignal
 from gui.styles import Theme
 from config import Config
 from utils.settings_store import load_json_settings, save_json_settings
+from utils.parameter_units import (
+    CURRENT_PARAMETER_SCHEMA,
+    GLOBAL_PERCENT_FIELDS,
+    migrate_global_settings,
+    percent_to_ratio,
+    ratio_to_percent,
+)
 
 SETTINGS_PATH = Config.PREFERENCES_DIR / "global.json"
 LEGACY_SETTINGS_PATH = Path.home() / ".bn_trader_global.json"
@@ -32,27 +39,27 @@ DEFAULTS = {
         "min_reserve_ratio": 0.10,
     },
     "position": {
-        "position_multiplier": 1.0, "trailing_stop_pct": 1.5,
+        "position_multiplier": 1.0, "trailing_stop_pct": 0.015,
         "min_risk_reward": 1.5, "auto_close_timeout": 0,
         "initial_position_ratio": 0.20, "scale_in_ratio": 0.50,
-        "max_position_ratio": 0.50, "take_profit_trigger": 4.0,
-        "breakeven_stop": 0.50,
+        "max_position_ratio": 0.50, "take_profit_trigger": 0.04,
+        "breakeven_stop": 0.005,
     },
 }
 
 LABELS = {
-    "total_capital": "初始总资金", "reserve_ratio": "准备金比例",
-    "max_single_trade_ratio": "单笔最大仓位", "daily_loss_limit": "日亏损上限",
+    "total_capital": "初始总资金", "reserve_ratio": "准备金比例 %",
+    "max_single_trade_ratio": "单笔最大仓位 %", "daily_loss_limit": "日亏损上限 %",
     "max_loss_per_trade": "单笔最大亏损 %", "max_profit_per_trade": "单笔止盈 %",
     "max_hold_time": "最大持仓时间(秒)", "max_daily_trades": "最多日交易次数",
-    "max_consecutive_loss": "最大连续亏损", "max_drawdown": "最大回撤比例",
+    "max_consecutive_loss": "最大连续亏损", "max_drawdown": "最大回撤比例 %",
     "cooldown_seconds": "冷却时间(秒)", "position_multiplier": "仓位倍数",
     "trailing_stop_pct": "移动止损 %", "min_risk_reward": "最低盈亏比",
     "auto_close_timeout": "超时自动平仓(秒)",
-    "min_reserve_ratio": "准备金最低比例",
-    "initial_position_ratio": "初始仓位比例",
-    "scale_in_ratio": "加仓仓位比例",
-    "max_position_ratio": "最大仓位比例",
+    "min_reserve_ratio": "准备金最低比例 %",
+    "initial_position_ratio": "初始仓位比例 %",
+    "scale_in_ratio": "加仓仓位比例 %",
+    "max_position_ratio": "最大仓位比例 %",
     "take_profit_trigger": "止盈触发比例 %",
     "breakeven_stop": "保本止损 %",
 }
@@ -79,19 +86,36 @@ CAPITAL_GROUPS = [
 
 
 def load_global_settings() -> dict:
-    return load_json_settings(
+    data = load_json_settings(
         SETTINGS_PATH,
-        DEFAULTS,
+        {
+            **DEFAULTS,
+            "_schema_version": CURRENT_PARAMETER_SCHEMA,
+        },
         legacy_paths=[LEGACY_SETTINGS_PATH],
     )
+    migrated, changed = migrate_global_settings(data)
+    if changed:
+        save_json_settings(SETTINGS_PATH, migrated)
+    return migrated
 
 
 def save_global_settings(settings: dict):
-    save_json_settings(SETTINGS_PATH, settings)
+    save_json_settings(SETTINGS_PATH, {
+        **settings,
+        "_schema_version": CURRENT_PARAMETER_SCHEMA,
+    })
 
 
-def _make_spin(val):
-    if isinstance(val, float) and val < 10:
+def _make_spin(key, val):
+    if key in GLOBAL_PERCENT_FIELDS:
+        sp = QDoubleSpinBox()
+        sp.setRange(0, 100)
+        sp.setDecimals(2)
+        sp.setSuffix(" %")
+        sp.setValue(ratio_to_percent(val))
+        sp.setSingleStep(0.1)
+    elif isinstance(val, float) and val < 10:
         sp = QDoubleSpinBox()
         sp.setRange(0.001, 9999)
         sp.setDecimals(4)
@@ -162,7 +186,7 @@ class SettingsFormPage(QWidget):
             for index, key in enumerate(keys):
                 if key not in defaults:
                     continue
-                sp = _make_spin(defaults[key])
+                sp = _make_spin(key, defaults[key])
                 row = index // 3 + 1
                 col = (index % 3) * 2
                 fl.addWidget(QLabel(LABELS.get(key, key)), row, col)
@@ -200,17 +224,31 @@ class SettingsFormPage(QWidget):
     def _load(self):
         data = load_global_settings().get(self.section_key, DEFAULTS[self.section_key])
         for key, widget in self._fields.items():
-            widget.setValue(data.get(key, DEFAULTS[self.section_key][key]))
+            value = data.get(key, DEFAULTS[self.section_key][key])
+            widget.setValue(
+                ratio_to_percent(value)
+                if key in GLOBAL_PERCENT_FIELDS else value
+            )
 
     def _reset(self):
         r = QMessageBox.question(self, "确认", "恢复为默认值？")
         if r == QMessageBox.StandardButton.Yes:
             for key, widget in self._fields.items():
-                widget.setValue(DEFAULTS[self.section_key][key])
+                value = DEFAULTS[self.section_key][key]
+                widget.setValue(
+                    ratio_to_percent(value)
+                    if key in GLOBAL_PERCENT_FIELDS else value
+                )
 
     def _save(self):
         all_data = load_global_settings()
-        section = {key: widget.value() for key, widget in self._fields.items()}
+        section = {
+            key: (
+                percent_to_ratio(widget.value())
+                if key in GLOBAL_PERCENT_FIELDS else widget.value()
+            )
+            for key, widget in self._fields.items()
+        }
         all_data[self.section_key] = {
             **DEFAULTS[self.section_key], **section
         }

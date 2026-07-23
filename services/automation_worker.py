@@ -8,6 +8,7 @@ from services.binance_client import BinanceClient
 from services.scene_detector import SceneDetector
 from services.strategy_engine import StrategyEngine
 from strategies.base import SignalType
+from utils.parameter_units import strategy_runtime_params
 
 
 class AutomationEvaluationWorker(QThread):
@@ -47,15 +48,7 @@ class AutomationEvaluationWorker(QThread):
             engine = StrategyEngine()
             for scene_type, strategy in engine.strategies.items():
                 values = self.strategy_settings.get(scene_type, {})
-                params = {}
-                for key, value in values.items():
-                    if key == "enabled":
-                        continue
-                    params[key] = (
-                        value / 100.0
-                        if key.endswith("_pct") and value > 1 else value
-                    )
-                strategy.set_params(**params)
+                strategy.set_params(**strategy_runtime_params(values))
 
             strategy = engine.strategies.get(selected)
             signal = strategy.analyze(df, scene) if strategy else None
