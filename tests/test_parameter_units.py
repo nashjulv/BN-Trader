@@ -99,6 +99,28 @@ def test_global_v1_migration_preserves_existing_ratios_and_fixes_mixed_fields():
     assert migrated["position"]["breakeven_stop"] == pytest.approx(0.004)
 
 
+def test_global_v2_repairs_missed_percentage_point_values():
+    old = {
+        "risk": {
+            "max_loss_per_trade": 2.0,
+            "max_profit_per_trade": 3.5,
+            "max_drawdown": 0.1,
+        },
+        "_schema_version": 2,
+    }
+
+    migrated, changed = migrate_global_settings(old)
+
+    assert changed
+    assert migrated["risk"]["max_loss_per_trade"] == pytest.approx(0.02)
+    assert migrated["risk"]["max_profit_per_trade"] == pytest.approx(0.035)
+    assert migrated["risk"]["max_drawdown"] == pytest.approx(0.1)
+
+    unchanged, changed_again = migrate_global_settings(migrated)
+    assert not changed_again
+    assert unchanged == migrated
+
+
 def test_runtime_params_never_guess_or_double_convert_percentages():
     params = strategy_runtime_params({
         "enabled": True,

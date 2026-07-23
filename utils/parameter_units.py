@@ -91,7 +91,7 @@ def migrate_strategy_settings(data: Mapping) -> tuple[dict, bool]:
 
 
 def migrate_global_settings(data: Mapping) -> tuple[dict, bool]:
-    """迁移全局 schema v1 中以百分数保存的少数历史字段。"""
+    """迁移旧百分数，并修复曾被错误标记为 schema v2 的比例值。"""
     migrated = deepcopy(dict(data))
     version = int(migrated.get("_schema_version", 1) or 1)
     changed = version < CURRENT_PARAMETER_SCHEMA
@@ -104,4 +104,19 @@ def migrate_global_settings(data: Mapping) -> tuple[dict, bool]:
                 if isinstance(value, (int, float)) and not isinstance(value, bool):
                     section[key] = percent_to_ratio(value)
         migrated["_schema_version"] = CURRENT_PARAMETER_SCHEMA
+
+    # 早期 v2 迁移遗漏了部分字段，可能留下 2.0（本意 2%）这类不可能
+    # 作为内部比例使用的值。只修复大于 1 的无歧义值，避免二次转换。
+    for section in migrated.values():
+        if not isinstance(section, dict):
+            continue
+        for key in GLOBAL_PERCENT_FIELDS:
+            value = section.get(key)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and 1 < float(value) <= 100
+            ):
+                section[key] = percent_to_ratio(value)
+                changed = True
     return migrated, changed
