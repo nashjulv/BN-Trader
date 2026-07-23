@@ -1,6 +1,6 @@
 """
 左侧图标导航栏 — 匹配 UI 设计稿
-主页 / 自动化 / 策略 / 资金 / 风控 / 持仓 / 日志 / 回测 / 帮助 / 设置
+主页 / 自动化 / 策略 / 资金 / 风控 / 持仓 / 日志 / 回测 / 帮助 / 研报
 """
 
 from typing import Dict, List, Tuple
@@ -27,13 +27,13 @@ NAV_ITEMS: List[Tuple[str, str, str]] = [
     ("logs",      "☰",  "日志详情"),
     ("backtest",  "▷",  "回测"),
     ("help",      "?",  "帮助中心"),
-    ("settings",  "⚙",  "API / 设置"),
+    ("research",  "⌁",  "AI 研究报告（建设中）"),
 ]
 
 NAV_LABELS = {
     "dashboard": "行情", "automation": "自动", "strategy": "策略", "capital": "资金",
     "risk": "风控", "position": "持仓", "logs": "日志",
-    "backtest": "复盘", "help": "帮助", "settings": "设置",
+    "backtest": "复盘", "help": "帮助", "research": "研报",
 }
 
 class SideBar(QWidget):
@@ -198,6 +198,14 @@ class SideBar(QWidget):
             path.cubicTo(13, 9.4, 10.1, 9.7, 10.1, 12)
             painter.drawPath(path)
             painter.drawPoint(QPointF(10.1, 14.5))
+        elif key == "research":
+            painter.drawRoundedRect(QRectF(3.5, 2.5, 13, 15), 2, 2)
+            painter.drawLine(QPointF(6.5, 6), QPointF(13.5, 6))
+            path = QPainterPath(QPointF(6, 14))
+            path.lineTo(8.5, 11)
+            path.lineTo(10.5, 12.5)
+            path.lineTo(14, 8.5)
+            painter.drawPath(path)
         else:
             for y, knob in ((5, 7), (10, 13), (15, 9)):
                 painter.drawLine(QPointF(3, y), QPointF(17, y))

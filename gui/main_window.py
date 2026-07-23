@@ -214,6 +214,11 @@ class MainWindow(QMainWindow):
         self._pages["help"] = self.help_page
         self.page_stack.addWidget(self._pages["help"])
 
+        self._pages["research"] = self._build_placeholder(
+            "AI 研究报告", "研报功能建设中"
+        )
+        self.page_stack.addWidget(self._pages["research"])
+
         self.api_page = ApiSettingsPage()
         self.api_page._save_btn.clicked.connect(self._on_api_page_saved)
         self.api_page._cancel_btn.clicked.connect(
@@ -358,6 +363,7 @@ class MainWindow(QMainWindow):
                 "risk": "风控设置", "position": "持仓设置",
                 "logs": "日志详情", "backtest": "回测",
                 "help": "帮助中心",
+                "research": "AI 研究报告 · 建设中",
                 "settings": "API 设置",
             }
             self._status_msg.setText(names.get(key, key))
@@ -794,12 +800,13 @@ class MainWindow(QMainWindow):
         settings = load_strategy_settings()
         self._enabled_strategies = {
             scene_type for scene_type, values in settings.items()
-            if values.get("enabled", True)
+            if isinstance(values, dict) and values.get("enabled", True)
         }
         for scene_type, strategy in self.strategy_engine.strategies.items():
-            if scene_type in settings:
+            values = settings.get(scene_type)
+            if isinstance(values, dict):
                 sp = {}
-                for k, v in settings[scene_type].items():
+                for k, v in values.items():
                     if k == "enabled":
                         continue
                     sp[k] = v / 100.0 if k.endswith("_pct") and v > 1 else v
