@@ -170,7 +170,10 @@ class RiskManager:
                     allowed=False,
                     level="WARNING",
                     message=f"单笔风险过大: {risk_ratio:.2%}",
-                    detail=f"超过限制{self.single_limits['max_loss_ratio']:.2%}"
+                    detail=(
+                        f"入场价 {entry_price:g}，止损价 {stop_loss:g}；"
+                        f"超过限制{self.single_limits['max_loss_ratio']:.2%}"
+                    )
                 )
 
         # 检查仓位大小

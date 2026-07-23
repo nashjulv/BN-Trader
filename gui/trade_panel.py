@@ -12,6 +12,65 @@ from gui.styles import Theme
 from config import Config
 
 
+def validate_exit_prices(
+    side: str,
+    entry_price: float,
+    stop_loss: float = 0.0,
+    take_profit: float = 0.0,
+    max_loss_ratio: float | None = None,
+) -> tuple[bool, str]:
+    """校验手动订单的绝对止盈/止损价格，并返回可操作的提示。"""
+    side = side.upper()
+    if entry_price <= 0:
+        return False, "当前入场价格无效，请等待行情更新后重试。"
+
+    if stop_loss > 0:
+        wrong_side = (
+            side == "BUY" and stop_loss >= entry_price
+        ) or (
+            side == "SELL" and stop_loss <= entry_price
+        )
+        if wrong_side:
+            direction = "低于" if side == "BUY" else "高于"
+            return (
+                False,
+                f"止损价必须{direction}入场价。\n\n"
+                f"入场价：{entry_price:g} USDT\n"
+                f"止损价：{stop_loss:g} USDT\n\n"
+                "这里填写的是目标价格，不是百分比。",
+            )
+
+        loss_ratio = abs(entry_price - stop_loss) / entry_price
+        if max_loss_ratio is not None and loss_ratio > max_loss_ratio:
+            return (
+                False,
+                f"止损价距离入场价 {loss_ratio:.2%}，"
+                f"超过当前单笔风险上限 {max_loss_ratio:.2%}。\n\n"
+                f"入场价：{entry_price:g} USDT\n"
+                f"止损价：{stop_loss:g} USDT\n\n"
+                "这里填写的是绝对价格，不是百分比。"
+                "例如入场价 100、止损 0.7%，应填写 99.3（买入）或 100.7（卖出）。",
+            )
+
+    if take_profit > 0:
+        wrong_side = (
+            side == "BUY" and take_profit <= entry_price
+        ) or (
+            side == "SELL" and take_profit >= entry_price
+        )
+        if wrong_side:
+            direction = "高于" if side == "BUY" else "低于"
+            return (
+                False,
+                f"止盈价必须{direction}入场价。\n\n"
+                f"入场价：{entry_price:g} USDT\n"
+                f"止盈价：{take_profit:g} USDT\n\n"
+                "这里填写的是目标价格，不是百分比。",
+            )
+
+    return True, ""
+
+
 class TradePanel(QWidget):
     place_order = pyqtSignal(str, str, float, float, float, float)
 
@@ -20,6 +79,7 @@ class TradePanel(QWidget):
         self.setMinimumWidth(240)
         self._available = 0.0
         self._last_price = 0.0
+        self._max_loss_ratio = Config.MAX_LOSS_PER_TRADE
         self._init_ui()
         self._refresh_theme()
 
@@ -104,28 +164,35 @@ class TradePanel(QWidget):
         sl_tp_row.setSpacing(8)
 
         tp_col = QVBoxLayout()
-        tp_cap = QLabel("止盈 (可选)")
+        tp_cap = QLabel("止盈价 (USDT，可选)")
         tp_cap.setObjectName("dimLabel")
         self.take_profit_input = QDoubleSpinBox()
         self.take_profit_input.setRange(0, 9999999)
         self.take_profit_input.setDecimals(2)
         self.take_profit_input.setSpecialValueText("—")
+        self.take_profit_input.setToolTip("填写止盈目标价格，不是百分比")
         tp_col.addWidget(tp_cap)
         tp_col.addWidget(self.take_profit_input)
 
         sl_col = QVBoxLayout()
-        sl_cap = QLabel("止损 (可选)")
+        sl_cap = QLabel("止损价 (USDT，可选)")
         sl_cap.setObjectName("dimLabel")
         self.stop_loss_input = QDoubleSpinBox()
         self.stop_loss_input.setRange(0, 9999999)
         self.stop_loss_input.setDecimals(2)
         self.stop_loss_input.setSpecialValueText("—")
+        self.stop_loss_input.setToolTip("填写止损目标价格，不是百分比")
         sl_col.addWidget(sl_cap)
         sl_col.addWidget(self.stop_loss_input)
 
         sl_tp_row.addLayout(tp_col)
         sl_tp_row.addLayout(sl_col)
         layout.addLayout(sl_tp_row)
+
+        self.exit_price_hint = QLabel("止盈/止损请输入目标价格，不填写百分比。")
+        self.exit_price_hint.setObjectName("dimLabel")
+        self.exit_price_hint.setWordWrap(True)
+        layout.addWidget(self.exit_price_hint)
 
         # 可用余额
         self.avail_label = QLabel("可用: — USDT")
@@ -162,6 +229,9 @@ class TradePanel(QWidget):
 
         self.qty_input.valueChanged.connect(self._update_estimate)
         self.price_input.valueChanged.connect(self._update_estimate)
+        self.price_input.valueChanged.connect(self._refresh_exit_hint)
+        self.take_profit_input.valueChanged.connect(self._refresh_exit_hint)
+        self.stop_loss_input.valueChanged.connect(self._refresh_exit_hint)
         self.type_group.buttonClicked.connect(self._on_type_changed)
         self.symbol_combo.currentTextChanged.connect(self._on_symbol_changed)
 
@@ -178,6 +248,9 @@ class TradePanel(QWidget):
             f"color:{t['warning']}; background:{t['tip_bg']}; "
             f"border:1px solid {t['tip_border']}; border-radius:6px; "
             "padding:7px; font-size:11px;"
+        )
+        self.exit_price_hint.setStyleSheet(
+            f"color:{t['text_secondary']}; font-size:11px;"
         )
 
     def _style_type_btn(self, btn: QPushButton, active: bool):
@@ -198,8 +271,12 @@ class TradePanel(QWidget):
         self.price_input.setEnabled(btn is self._limit_btn)
 
     def _on_symbol_changed(self, symbol: str):
-        base = symbol.removesuffix("USDT")
+        base = symbol.split("/")[0] if "/" in symbol else symbol.removesuffix("USDT")
         self.qty_cap.setText(f"数量 ({base})")
+        # 退出价是交易对相关的绝对价格，切换币种时不可沿用旧值。
+        self.stop_loss_input.setValue(0)
+        self.take_profit_input.setValue(0)
+        self._refresh_exit_hint()
 
     def update_price(self, price: float):
         self._last_price = float(price)
@@ -233,6 +310,23 @@ class TradePanel(QWidget):
         self.fee_label.setText(
             f"预估手续费: {fee:.4f} USDT  ·  预估保证金: {notional:,.2f} USDT")
 
+    def _refresh_exit_hint(self):
+        entry = self.price_input.value()
+        sl = self.stop_loss_input.value()
+        tp = self.take_profit_input.value()
+        parts = []
+        if entry > 0 and sl > 0:
+            parts.append(f"止损距离 {abs(entry - sl) / entry:.2%}")
+        if entry > 0 and tp > 0:
+            parts.append(f"止盈距离 {abs(entry - tp) / entry:.2%}")
+        self.exit_price_hint.setText(
+            " · ".join(parts) if parts
+            else "止盈/止损请输入目标价格，不填写百分比。"
+        )
+
+    def set_max_loss_ratio(self, ratio: float):
+        self._max_loss_ratio = max(0.0, float(ratio))
+
     def _submit_order(self, side: str):
         sym = self.symbol_combo.currentText()
         qty = self.qty_input.value()
@@ -250,6 +344,13 @@ class TradePanel(QWidget):
             QMessageBox.warning(
                 self, "无法下单", "当前价格无效，请等待行情更新后重试。"
             )
+            return
+        valid, message = validate_exit_prices(
+            side, price, sl, tp, self._max_loss_ratio
+        )
+        if not valid:
+            QMessageBox.warning(self, "止盈止损价格无效", message)
+            self.stop_loss_input.setFocus()
             return
         self.place_order.emit(sym, side, qty, price, sl, tp)
 

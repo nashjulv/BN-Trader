@@ -855,8 +855,9 @@ class MainWindow(QMainWindow):
         self.capital_pool.daily_loss_limit = cap.get("daily_loss_limit", 0.05)
         self.capital_pool.position_multiplier = position.get(
             "position_multiplier", self.capital_pool.position_multiplier)
-        self.risk_manager.single_limits["max_loss_ratio"] = risk.get(
-            "max_loss_per_trade", 0.02)
+        max_loss_ratio = risk.get("max_loss_per_trade", 0.02)
+        self.risk_manager.single_limits["max_loss_ratio"] = max_loss_ratio
+        self.trade_panel.set_max_loss_ratio(max_loss_ratio)
         self.risk_manager.single_limits["max_profit_ratio"] = risk.get(
             "max_profit_per_trade", 0.05)
         self.risk_manager.single_limits["max_hold_time"] = int(

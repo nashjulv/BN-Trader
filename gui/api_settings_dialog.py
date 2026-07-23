@@ -128,7 +128,7 @@ class ApiSettingsPage(QWidget):
             ("api_key", "API Key"),
             ("secret", "Secret Key"),
             ("server", "服务器连接"),
-            ("perm", "账户权限"),
+            ("perm", "现货下单权限"),
             ("time", "时间同步"),
         ]:
             row = QHBoxLayout()
@@ -331,34 +331,83 @@ class ApiSettingsPage(QWidget):
             QMessageBox.warning(self, "提示", "请先填写 API Key 和 Secret Key")
             return
 
-        self._set_check("api_key", bool(ak), "✓ 有效" if ak else "✗ 无效")
-        self._set_check("secret", bool(sk), "✓ 有效" if sk else "✗ 无效")
-
         try:
             t0 = time.time()
-            params = {"timestamp": int(time.time() * 1000)}
-            query = urlencode(params)
-            sig = hmac.new(sk.encode(), query.encode(), hashlib.sha256).hexdigest()
-            r = requests.get(
-                "https://api.binance.com/api/v3/account",
-                params={**params, "signature": sig},
-                headers={"X-MBX-APIKEY": ak}, timeout=10,
-            )
+            def signed_request(method: str, endpoint: str, extra=None):
+                params = dict(extra or {})
+                params["timestamp"] = int(time.time() * 1000)
+                query = urlencode(params)
+                sig = hmac.new(
+                    sk.encode(), query.encode(), hashlib.sha256
+                ).hexdigest()
+                kwargs = {
+                    "headers": {"X-MBX-APIKEY": ak},
+                    "timeout": 10,
+                }
+                signed_params = {**params, "signature": sig}
+                if method == "POST":
+                    kwargs["data"] = signed_params
+                    return requests.post(
+                        f"https://api.binance.com{endpoint}", **kwargs
+                    )
+                kwargs["params"] = signed_params
+                return requests.get(
+                    f"https://api.binance.com{endpoint}", **kwargs
+                )
+
+            r = signed_request("GET", "/api/v3/account")
             latency = int((time.time() - t0) * 1000)
             self._latency_lbl.setText(f"{latency} ms")
 
             if r.status_code == 200:
                 account = r.json()
+                restrictions_response = signed_request(
+                    "GET",
+                    "/sapi/v1/account/apiRestrictions"
+                )
+                restrictions = (
+                    restrictions_response.json()
+                    if restrictions_response.status_code == 200 else {}
+                )
                 server = requests.get(
                     "https://api.binance.com/api/v3/time", timeout=10).json()
                 server_ms = int(server.get("serverTime", 0))
                 drift = abs(server_ms - int(time.time() * 1000))
                 self._connected = True
+                self._set_check("api_key", True, "✓ 有效")
+                self._set_check("secret", True, "✓ 签名有效")
                 self._set_check("server", True)
-                can_trade = bool(account.get("canTrade", False))
+                account_can_trade = bool(account.get("canTrade", False))
+                key_can_trade = bool(
+                    restrictions.get("enableSpotAndMarginTrading", False)
+                )
+                order_test = signed_request(
+                    "POST",
+                    "/api/v3/order/test",
+                    {
+                        "symbol": "BTCUSDT",
+                        "side": "BUY",
+                        "type": "MARKET",
+                        "quoteOrderQty": "10",
+                    },
+                )
+                order_test_data = (
+                    order_test.json() if order_test.content else {}
+                )
+                symbol_allowed = order_test.status_code == 200
+                can_trade = (
+                    account_can_trade and key_can_trade and symbol_allowed
+                )
+                order_test_code = order_test_data.get("code")
                 self._set_check(
                     "perm", can_trade,
-                    "✓ 现货交易" if can_trade else "✗ 无交易权限")
+                    "✓ 已开启" if can_trade else (
+                        "✗ BTCUSDT 未授权"
+                        if order_test_code == -2010
+                        and "not whitelisted" in
+                        order_test_data.get("msg", "").lower()
+                        else "✗ 未开启"
+                    ))
                 self._set_check(
                     "time", drift <= 1000,
                     f"✓ 偏差 {drift}ms" if drift <= 1000 else f"✗ 偏差 {drift}ms")
@@ -369,9 +418,32 @@ class ApiSettingsPage(QWidget):
                     datetime.fromtimestamp(server_ms / 1000).strftime(
                         "%Y-%m-%d %H:%M:%S"))
                 self._update_status_badge()
-                QMessageBox.information(self, "测试结果", f"连接成功！延迟 {latency}ms")
+                if can_trade:
+                    QMessageBox.information(
+                        self, "测试结果",
+                        f"连接与现货下单权限均正常！延迟 {latency}ms\n\n"
+                        "若刚更新过密钥，请点击“保存”使下单客户端立即生效。"
+                    )
+                else:
+                    detail = (
+                        "当前 API Key 已开启现货交易，但 BTCUSDT "
+                        "不在允许交易的白名单中。请在 Binance API 管理中"
+                        "加入需要交易的交易对。"
+                        if order_test_code == -2010
+                        and "not whitelisted" in
+                        order_test_data.get("msg", "").lower()
+                        else
+                        "API 读取与签名正常，但 API Key 未开启现货交易权限。"
+                        "请在 Binance API 管理中开启现货交易权限后重新测试。"
+                    )
+                    QMessageBox.warning(
+                        self, "连接成功，但不能下单",
+                        detail
+                    )
             else:
                 self._connected = False
+                self._set_check("api_key", False, "✗ 认证失败")
+                self._set_check("secret", False, "✗ 认证失败")
                 self._set_check("server", False)
                 self._set_check("perm", False)
                 self._update_status_badge()

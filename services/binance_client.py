@@ -20,6 +20,23 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
+class BinanceAPIError(RuntimeError):
+    """不泄露签名 URL 的 Binance API 错误。"""
+
+    def __init__(self, status_code: int, code=None, message: str = ""):
+        self.status_code = status_code
+        self.code = code
+        self.api_message = message
+        display_message = message
+        if code == -2010 and "not whitelisted" in message.lower():
+            display_message = f"交易对未加入该 API Key 的白名单（{message}）"
+        code_text = f" {code}" if code is not None else ""
+        super().__init__(
+            f"Binance API{code_text}: "
+            f"{display_message or '请求失败'} (HTTP {status_code})"
+        )
+
+
 class BinanceClient:
     """币安API客户端"""
 
@@ -66,28 +83,44 @@ class BinanceClient:
                  signed: bool = False) -> Dict:
         """发送HTTP请求"""
         url = f"{self.base_url}{endpoint}"
+        original_params = dict(params or {})
 
-        if params is None:
-            params = {}
+        def prepare_params() -> Dict:
+            request_params = dict(original_params)
+            if signed:
+                request_params["timestamp"] = int(time.time() * 1000)
+                query_string = urlencode(request_params)
+                request_params["signature"] = self._generate_signature(query_string)
+            return request_params
 
-        if signed:
-            params["timestamp"] = int(time.time() * 1000)
-            query_string = urlencode(params)
-            params["signature"] = self._generate_signature(query_string)
+        def send(request_params: Dict):
+            if method == "GET":
+                return self.session.get(url, params=request_params, timeout=10)
+            if method == "POST":
+                return self.session.post(url, data=request_params, timeout=10)
+            if method == "DELETE":
+                return self.session.delete(url, params=request_params, timeout=10)
+            raise ValueError(f"不支持的HTTP方法: {method}")
 
         try:
-            if method == "GET":
-                response = self.session.get(url, params=params, timeout=10)
-            elif method == "POST":
-                response = self.session.post(url, data=params, timeout=10)
-            elif method == "DELETE":
-                response = self.session.delete(url, params=params, timeout=10)
-            else:
-                raise ValueError(f"不支持的HTTP方法: {method}")
+            response = send(prepare_params())
 
-            response.raise_for_status()
+            # 设置页更新过凭据但运行中的客户端尚未刷新时，自动恢复一次。
+            if signed and response.status_code == 401:
+                self.reload_keys()
+                response = send(prepare_params())
+
+            if not response.ok:
+                try:
+                    payload = response.json()
+                except (ValueError, json.JSONDecodeError):
+                    payload = {}
+                raise BinanceAPIError(
+                    response.status_code,
+                    payload.get("code"),
+                    payload.get("msg") or response.reason,
+                )
             return response.json()
-
         except requests.exceptions.RequestException as e:
             logger.error(f"API请求失败: {e}")
             raise
