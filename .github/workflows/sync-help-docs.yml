@@ -7,6 +7,8 @@ on:
       - main
     paths-ignore:
       - "docs/产品资料.md"
+      - "docs/产品手册.md"
+      - "docs/产品归档.md"
       - "docs/系统帮助.md"
       - "docs/升级与数据迁移.md"
 
@@ -31,10 +33,10 @@ jobs:
       - name: Commit generated documents when changed
         shell: bash
         run: |
-          if [[ -n "$(git status --porcelain -- docs/产品资料.md docs/系统帮助.md docs/升级与数据迁移.md)" ]]; then
+          if [[ -n "$(git status --porcelain -- docs/产品资料.md docs/产品手册.md docs/产品归档.md docs/系统帮助.md docs/升级与数据迁移.md)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/产品资料.md docs/系统帮助.md docs/升级与数据迁移.md
+            git add docs/产品资料.md docs/产品手册.md docs/产品归档.md docs/系统帮助.md docs/升级与数据迁移.md
             git commit -m "docs: refresh generated product help"
             git push
           fi

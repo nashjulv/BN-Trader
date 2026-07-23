@@ -99,6 +99,95 @@ def help_markdown(data: dict, version: str) -> str:
     return "\n".join(lines)
 
 
+def manual_markdown(data: dict, version: str) -> str:
+    """生成包含产品概览与完整使用说明的统一产品手册。"""
+    product = data["product"]
+    lines = [
+        f"# {product['name']} v{version} 产品手册",
+        "",
+        f"> {product['subtitle']}",
+        "",
+        "## 产品定位",
+        "",
+        product["summary"],
+        "",
+        "## 核心能力",
+        "",
+    ]
+    _list(lines, product["features"])
+    lines.extend(["", "## 目标用户", ""])
+    _list(lines, product["audience"])
+    lines.extend(["", "## 支持平台", ""])
+    _list(lines, product["platforms"])
+    lines.extend(["", "## 安全与隐私", ""])
+    _list(lines, product["security"])
+
+    lines.extend(["", "# 使用说明", ""])
+    for number, chapter in enumerate(data["chapters"], 1):
+        lines.extend([
+            f"## {number}. {chapter['title']}",
+            "",
+            chapter["summary"],
+            "",
+        ])
+        for section in chapter["sections"]:
+            lines.extend([f"### {section['title']}", ""])
+            if section.get("body"):
+                lines.extend([section["body"], ""])
+            if section.get("items"):
+                _list(lines, section["items"])
+                lines.append("")
+            if section.get("steps"):
+                _list(lines, section["steps"], ordered=True)
+                lines.append("")
+            if section.get("note"):
+                lines.extend([f"> 提示：{section['note']}", ""])
+
+    lines.extend([
+        "# 风险声明",
+        "",
+        "本产品是交易辅助工具，不构成投资建议，也不保证收益。数字资产价格波动剧烈，用户应独立判断并承担交易风险。",
+        "",
+        "---",
+        "",
+        "本文档由 `tools/generate_help_docs.py` 根据 `docs/help_content.json` 自动生成，请勿直接编辑。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def archive_markdown(data: dict, version: str) -> str:
+    """生成当前版本的产品能力与边界归档。"""
+    archive = data["archive"]
+    lines = [
+        f"# {archive['title']}",
+        "",
+        f"适用版本：v{version}",
+        "",
+        archive["summary"],
+        "",
+    ]
+    for number, section in enumerate(archive["sections"], 1):
+        lines.extend([f"## {number}. {section['title']}", ""])
+        if section.get("body"):
+            lines.extend([section["body"], ""])
+        if section.get("items"):
+            _list(lines, section["items"])
+            lines.append("")
+        if section.get("steps"):
+            _list(lines, section["steps"], ordered=True)
+            lines.append("")
+        if section.get("note"):
+            lines.extend([f"> 注意：{section['note']}", ""])
+    lines.extend([
+        "---",
+        "",
+        "本文档由 `tools/generate_help_docs.py` 根据 `docs/help_content.json` 自动生成，请勿直接编辑。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def upgrade_markdown(data: dict, version: str) -> str:
     upgrade = data["upgrade"]
     lines = [
@@ -138,6 +227,8 @@ def generate(output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     outputs = {
         output_dir / "产品资料.md": product_markdown(data, version),
+        output_dir / "产品手册.md": manual_markdown(data, version),
+        output_dir / "产品归档.md": archive_markdown(data, version),
         output_dir / "系统帮助.md": help_markdown(data, version),
         output_dir / "升级与数据迁移.md": upgrade_markdown(data, version),
     }

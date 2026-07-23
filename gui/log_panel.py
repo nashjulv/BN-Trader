@@ -2,15 +2,16 @@
 交易日志面板 — 主界面迷你版 + 详情页表格版
 """
 
+import html
 from datetime import datetime
 from typing import List, Dict
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QTextEdit, QPushButton, QFrame,
                                QTableWidget, QTableWidgetItem, QHeaderView,
-                               QAbstractItemView)
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor
+                               QAbstractItemView, QApplication, QMenu)
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QColor, QAction, QKeySequence, QShortcut
 
 from gui.styles import Theme
 
@@ -26,6 +27,17 @@ LEVEL_MAP = {
 }
 
 
+def format_log_entries(entries: List[Dict]) -> str:
+    """将日志条目转换为适合复制、粘贴和问题反馈的纯文本。"""
+    return "\n".join(
+        f"[{entry.get('full_time', entry.get('time', ''))}] "
+        f"[{entry.get('category', '系统')}] "
+        f"[{LEVEL_MAP.get(entry.get('level', 'INFO'), entry.get('level', 'INFO'))}] "
+        f"{entry.get('message', '')}"
+        for entry in entries
+    )
+
+
 class LogPanel(QWidget):
     """主界面下方迷你日志"""
 
@@ -37,6 +49,7 @@ class LogPanel(QWidget):
         self._filter_btns: Dict[str, QPushButton] = {}
         self._page = 0
         self._page_size = 20
+        self._copy_shortcuts = []
         self._init_ui()
         self._refresh_theme()
 
@@ -68,6 +81,14 @@ class LogPanel(QWidget):
             header.addWidget(btn)
 
         header.addStretch()
+        self.copy_btn = QPushButton("复制日志")
+        self.copy_btn.setObjectName("ghostBtn")
+        self.copy_btn.setToolTip("复制选中日志；未选择时复制当前筛选的全部日志")
+        self.copy_btn.setAccessibleName("复制日志")
+        self.copy_btn.setFixedHeight(24)
+        self.copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.copy_btn.clicked.connect(self._copy_logs)
+        header.addWidget(self.copy_btn)
         self.clear_btn = QPushButton("清空日志")
         self.clear_btn.setObjectName("ghostBtn")
         self.clear_btn.setFixedHeight(24)
@@ -91,6 +112,15 @@ class LogPanel(QWidget):
             self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
             self.table.setSelectionBehavior(
                 QAbstractItemView.SelectionBehavior.SelectRows)
+            self.table.setSelectionMode(
+                QAbstractItemView.SelectionMode.ExtendedSelection)
+            self.table.setContextMenuPolicy(
+                Qt.ContextMenuPolicy.CustomContextMenu)
+            self.table.customContextMenuRequested.connect(
+                self._show_table_context_menu)
+            shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.table)
+            shortcut.activated.connect(self._copy_logs)
+            self._copy_shortcuts.append(shortcut)
             self.table.verticalHeader().setVisible(False)
             self.table.setAlternatingRowColors(True)
             layout.addWidget(self.table)
@@ -115,6 +145,16 @@ class LogPanel(QWidget):
         else:
             self.log_text = QTextEdit()
             self.log_text.setReadOnly(True)
+            self.log_text.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+                | Qt.TextInteractionFlag.TextSelectableByKeyboard)
+            self.log_text.setContextMenuPolicy(
+                Qt.ContextMenuPolicy.CustomContextMenu)
+            self.log_text.customContextMenuRequested.connect(
+                self._show_text_context_menu)
+            shortcut = QShortcut(QKeySequence.StandardKey.Copy, self.log_text)
+            shortcut.activated.connect(self._copy_logs)
+            self._copy_shortcuts.append(shortcut)
             self.log_text.setMaximumHeight(180)
             layout.addWidget(self.log_text)
             self.table = None
@@ -186,7 +226,7 @@ class LogPanel(QWidget):
             lines.append(
                 f'<span style="color:{t["text_dim"]}">[{entry["time"]}]</span> '
                 f'<span style="color:{tag_c};font-weight:600">[{entry["category"]}]</span> '
-                f'<span style="color:{color}">{entry["message"]}</span>'
+                f'<span style="color:{color}">{html.escape(str(entry["message"]))}</span>'
             )
         self.log_text.setHtml("<br>".join(lines))
         sb = self.log_text.verticalScrollBar()
@@ -244,6 +284,57 @@ class LogPanel(QWidget):
         if self.table:
             self.table.setRowCount(0)
         self.add_system_log("日志已清空")
+
+    def _selected_table_text(self) -> str:
+        if self.table is None:
+            return ""
+        rows = sorted({
+            index.row()
+            for index in self.table.selectionModel().selectedRows()
+        })
+        return "\n".join(
+            "\t".join(
+                self.table.item(row, column).text()
+                if self.table.item(row, column) is not None else ""
+                for column in range(self.table.columnCount())
+            )
+            for row in rows
+        )
+
+    def _copy_logs(self, force_all: bool = False):
+        text = ""
+        if not force_all and self.log_text is not None:
+            cursor = self.log_text.textCursor()
+            if cursor.hasSelection():
+                text = cursor.selectedText().replace("\u2029", "\n")
+        elif not force_all and self.table is not None:
+            text = self._selected_table_text()
+
+        if not text:
+            text = format_log_entries(self._filtered())
+        if not text:
+            return
+
+        QApplication.clipboard().setText(text)
+        self.copy_btn.setText("已复制")
+        QTimer.singleShot(1200, lambda: self.copy_btn.setText("复制日志"))
+
+    def _show_text_context_menu(self, position):
+        menu = self.log_text.createStandardContextMenu()
+        menu.addSeparator()
+        copy_all = QAction("复制当前筛选的全部日志", menu)
+        copy_all.triggered.connect(lambda: self._copy_logs(force_all=True))
+        menu.addAction(copy_all)
+        menu.exec(self.log_text.mapToGlobal(position))
+
+    def _show_table_context_menu(self, position):
+        menu = QMenu(self.table)
+        copy_selected = menu.addAction("复制选中日志")
+        copy_selected.setEnabled(bool(self._selected_table_text()))
+        copy_selected.triggered.connect(self._copy_logs)
+        copy_all = menu.addAction("复制当前筛选的全部日志")
+        copy_all.triggered.connect(lambda: self._copy_logs(force_all=True))
+        menu.exec(self.table.viewport().mapToGlobal(position))
 
     def get_logs(self) -> List[Dict]:
         return self.log_entries
