@@ -1,0 +1,12 @@
+# Linux 桌面启动器
+[Desktop Entry]
+Type=Application
+Name=BN-Trader
+Name[zh_CN]=BN-Trader 短线交易系统
+Comment=Local short-term trading system for Binance
+Comment[zh_CN]=基于币安交易所的本地短线交易系统
+Exec=BN-Trader
+Icon=BN-Trader
+Terminal=false
+Categories=Finance;Office;
+Keywords=trading;crypto;binance;
