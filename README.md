@@ -10,6 +10,15 @@
 | macOS (Intel / Apple Silicon) | ✅ 完整支援 |
 | Linux (Ubuntu/Debian) | ✅ 完整支援 |
 
+## 桌面安装包
+
+GitHub Actions 会在手动触发时构建并保存 30 天，也会在推送 `v*` 标签时自动创建 Release：
+
+- Windows x64：NSIS 安装程序 `.exe`、免安装便携版 `.zip`
+- macOS Apple Silicon：拖拽安装镜像 `.dmg`、应用便携版 `.zip`
+
+macOS 自动构建产物目前未签名，适合内部测试。正式公开分发需配置 Apple Developer ID 签名与公证。
+
 ## 核心功能
 
 - **智能場景識別**: 自動識別5種行情場景（趨勢、震盪、突破、反轉、極端）

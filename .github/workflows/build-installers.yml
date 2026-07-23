@@ -1,0 +1,115 @@
+name: Build desktop installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  BN_TRADER_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.0' }}
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: x64
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build installer
+        run: python package.py --platform win64 --clean
+
+      - name: Build portable package
+        run: python package.py --platform win64 --skip-pyinstaller --portable
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: BN-Trader-Windows-x64
+          path: |
+            dist/BN-Trader-Setup-*.exe
+            dist/*win64-portable.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: macOS Apple Silicon
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: arm64
+          cache: pip
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -r requirements.txt
+
+      - name: Install DMG tooling
+        run: brew install create-dmg
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build application and DMG
+        run: python package.py --platform mac-arm64 --clean
+
+      - name: Build portable application archive
+        run: python package.py --platform mac-arm64 --skip-pyinstaller --portable
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: BN-Trader-macOS-arm64
+          path: |
+            dist/*.dmg
+            dist/*mac-arm64-portable.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Publish tagged release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - windows
+      - macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all packages
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          pattern: BN-Trader-*
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --generate-notes --title "BN-Trader $GITHUB_REF_NAME"

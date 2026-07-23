@@ -24,7 +24,7 @@ ASSETS.mkdir(exist_ok=True)
 
 
 def create_png(width=512, height=512) -> bytes:
-    """程序化生成带渐变背景和 B 字母的简单 PNG"""
+    """程序化生成有效的 RGBA 渐变 PNG。"""
     # 颜色定义
     BG_START = (24, 24, 60)     # 深蓝紫起点
     BG_END = (15, 52, 96)       # 深蓝终点
@@ -38,10 +38,8 @@ def create_png(width=512, height=512) -> bytes:
         g = int(BG_START[1] + (BG_END[1] - BG_START[1]) * t)
         b = int(BG_START[2] + (BG_END[2] - BG_START[2]) * t)
         for x in range(width):
-            row.extend([r, g, b])
+            row.extend([r, g, b, 255])
         return bytes(row)
-
-    raw = b"".join(make_row(y) for y in range(height))
 
     # PNG 编码
     def png_chunk(ctype, data):
@@ -49,10 +47,9 @@ def create_png(width=512, height=512) -> bytes:
         crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
         return struct.pack(">I", len(data)) + c + crc
 
-    # 压缩每行（filter byte 0 + RGBA）
-    compressed = b""
-    for y in range(height):
-        compressed += zlib.compress(b"\x00" + make_row(y)[:width * 4])
+    # PNG IDAT 必须是一个连续的 zlib 数据流。
+    raw = b"".join(b"\x00" + make_row(y) for y in range(height))
+    compressed = zlib.compress(raw, level=9)
 
     return (
         b"\x89PNG\r\n\x1a\n"
@@ -98,7 +95,7 @@ def main():
             iconset = ASSETS / "icon.iconset"
             iconset.mkdir(exist_ok=True)
 
-            sizes = [16, 32, 64, 128, 256, 512]
+            sizes = [16, 32, 128, 256, 512]
             for s in sizes:
                 name = f"icon_{s}x{s}.png"
                 subprocess.run(
@@ -114,10 +111,13 @@ def main():
                     capture_output=True
                 )
 
-            subprocess.run(
+            result = subprocess.run(
                 ["iconutil", "-c", "icns", str(iconset), "-o", str(icns_path)],
-                capture_output=True
+                capture_output=True,
+                text=True,
             )
+            if result.returncode != 0:
+                raise RuntimeError(result.stderr.strip() or "iconutil 转换失败")
             print(f"  {icns_path}")
             import shutil
             shutil.rmtree(iconset)

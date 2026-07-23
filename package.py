@@ -43,7 +43,7 @@ BUILD = ROOT / "build"
 PACKAGERS = ROOT / "packagers"
 ASSETS = ROOT / "assets"
 SPEC = ROOT / "BN-Trader.spec"
-VERSION = "1.0.0"
+VERSION = os.getenv("BN_TRADER_VERSION", "1.0.0").removeprefix("v")
 APP_NAME = "BN-Trader"
 DISPLAY_NAME = "BN-Trader 短线交易系统"
 PUBLISHER = "BN-Trader"
@@ -109,16 +109,16 @@ def _check_tool(name: str, install_hint: str) -> bool:
 
 
 def _require_pyinstaller():
-    try:
-        r = subprocess.run(
-            [sys.executable, "-m", "PyInstaller", "--version"],
-            capture_output=True, text=True
-        )
-        print(f"  PyInstaller {r.stdout.strip()}")
-        return True
-    except FileNotFoundError:
+    r = subprocess.run(
+        [sys.executable, "-m", "PyInstaller", "--version"],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
         print("  ✗ 未安装 PyInstaller → pip install pyinstaller")
         return False
+    print(f"  PyInstaller {r.stdout.strip()}")
+    return True
 
 
 # ==================================================================
@@ -144,9 +144,9 @@ def pyinstaller_build(platform_tag: str, onefile: bool = False) -> Path | None:
         sys.executable, "-m", "PyInstaller",
         str(SPEC),
         "--noconfirm",
+        "--clean",
         "--distpath", str(DIST),
         "--workpath", str(BUILD),
-        "--specpath", str(ROOT),
     ]
     if onefile:
         pyi_cmd.append("--onefile")
@@ -370,20 +370,25 @@ def build_macos_dmg(app_dir: Path, arch: str) -> Path | None:
     dmg_name = f"BN-Trader-{VERSION}-{arch}.dmg"
     dmg_path = DIST / dmg_name
 
-    r = _sh([
+    dmg_cmd = [
         "create-dmg",
         "--volname", f"BN-Trader {VERSION}",
-        "--volicon", str(ASSETS / "icon.icns"),
         "--window-pos", "200", "120",
         "--window-size", "600", "400",
         "--icon-size", "100",
         "--icon", f"{APP_NAME}.app", "180", "170",
         "--app-drop-link", "420", "170",
         "--hide-extension", f"{APP_NAME}.app",
-        "--background", str(PACKAGERS / "dmg_background.png"),
-        str(dmg_path),
-        str(app_dir),
-    ])
+    ]
+    icon_path = ASSETS / "icon.icns"
+    background_path = PACKAGERS / "dmg_background.png"
+    if icon_path.exists():
+        dmg_cmd.extend(["--volicon", str(icon_path)])
+    if background_path.exists():
+        dmg_cmd.extend(["--background", str(background_path)])
+    dmg_cmd.extend([str(dmg_path), str(app_dir)])
+
+    r = _sh(dmg_cmd)
 
     if r.returncode == 0 and dmg_path.exists():
         size = dmg_path.stat().st_size

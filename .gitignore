@@ -30,6 +30,7 @@ logs/
 
 # Build
 *.spec
+!BN-Trader.spec
 
 # Accidental pip/version redirect artifacts
 =[0-9]*

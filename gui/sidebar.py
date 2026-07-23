@@ -6,10 +6,12 @@
 from typing import Dict, List, Tuple
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QToolButton, QLabel, QFrame, QApplication, QStyle
+    QWidget, QVBoxLayout, QToolButton, QLabel, QFrame
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QIcon, QPainter
+from PyQt6.QtCore import Qt, QSize, QRectF, QPointF, pyqtSignal
+from PyQt6.QtGui import (
+    QFont, QColor, QIcon, QPainter, QPixmap, QPen, QPainterPath
+)
 
 from gui.styles import Theme
 
@@ -31,18 +33,6 @@ NAV_LABELS = {
     "risk": "风控", "position": "持仓", "logs": "日志",
     "backtest": "复盘", "settings": "设置",
 }
-
-NAV_ICONS = {
-    "dashboard": QStyle.StandardPixmap.SP_ComputerIcon,
-    "strategy": QStyle.StandardPixmap.SP_FileDialogDetailedView,
-    "capital": QStyle.StandardPixmap.SP_DriveHDIcon,
-    "risk": QStyle.StandardPixmap.SP_MessageBoxWarning,
-    "position": QStyle.StandardPixmap.SP_DirHomeIcon,
-    "logs": QStyle.StandardPixmap.SP_FileDialogListView,
-    "backtest": QStyle.StandardPixmap.SP_BrowserReload,
-    "settings": QStyle.StandardPixmap.SP_FileDialogContentsView,
-}
-
 
 class SideBar(QWidget):
     """窄图标侧栏"""
@@ -83,7 +73,6 @@ class SideBar(QWidget):
         for key, icon, tip in NAV_ITEMS:
             btn = QToolButton()
             btn.setText(NAV_LABELS[key])
-            btn.setIcon(QApplication.style().standardIcon(NAV_ICONS[key]))
             btn.setIconSize(QSize(16, 16))
             btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
             btn.setCheckable(True)
@@ -117,8 +106,8 @@ class SideBar(QWidget):
 
         for key, btn in self._btns.items():
             active = key == self._active
-            btn.setIcon(self._tinted_icon(
-                NAV_ICONS[key], t["accent"] if active else t["text_sidebar_dim"]))
+            btn.setIcon(self._line_icon(
+                key, t["accent"] if active else t["text_sidebar_dim"]))
             if active:
                 btn.setStyleSheet(
                     f"QToolButton {{"
@@ -141,11 +130,61 @@ class SideBar(QWidget):
                 )
 
     @staticmethod
-    def _tinted_icon(icon_type, color: str) -> QIcon:
-        pixmap = QApplication.style().standardIcon(icon_type).pixmap(16, 16)
+    def _line_icon(key: str, color: str) -> QIcon:
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_SourceIn)
-        painter.fillRect(pixmap.rect(), QColor(color))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color))
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        if key == "dashboard":
+            painter.drawLine(QPointF(3, 16), QPointF(17, 16))
+            painter.drawRoundedRect(QRectF(4, 10, 2.5, 5), 1, 1)
+            painter.drawRoundedRect(QRectF(8.8, 6, 2.5, 9), 1, 1)
+            painter.drawRoundedRect(QRectF(13.5, 3, 2.5, 12), 1, 1)
+        elif key == "strategy":
+            path = QPainterPath(QPointF(3, 14))
+            path.lineTo(7, 10)
+            path.lineTo(10, 12)
+            path.lineTo(16, 5)
+            painter.drawPath(path)
+            painter.drawLine(QPointF(12.5, 5), QPointF(16, 5))
+            painter.drawLine(QPointF(16, 5), QPointF(16, 8.5))
+        elif key == "capital":
+            painter.drawRoundedRect(QRectF(2.5, 5, 15, 11), 2.5, 2.5)
+            painter.drawLine(QPointF(3, 8), QPointF(17, 8))
+            painter.drawEllipse(QPointF(14, 12), 1, 1)
+        elif key == "risk":
+            path = QPainterPath(QPointF(10, 2.5))
+            path.lineTo(16, 5)
+            path.lineTo(15, 12)
+            path.quadTo(13.5, 16, 10, 17.5)
+            path.quadTo(6.5, 16, 5, 12)
+            path.lineTo(4, 5)
+            path.closeSubpath()
+            painter.drawPath(path)
+        elif key == "position":
+            painter.drawRoundedRect(QRectF(3, 4, 14, 12), 2, 2)
+            painter.drawLine(QPointF(3, 8), QPointF(17, 8))
+            painter.drawLine(QPointF(7, 4), QPointF(7, 16))
+        elif key == "logs":
+            painter.drawRoundedRect(QRectF(4, 2.5, 12, 15), 2, 2)
+            for y in (7, 10.5, 14):
+                painter.drawLine(QPointF(7, y), QPointF(13, y))
+        elif key == "backtest":
+            painter.drawArc(QRectF(3, 3, 14, 14), 40 * 16, 285 * 16)
+            painter.drawLine(QPointF(3.6, 5.5), QPointF(3.4, 2.5))
+            painter.drawLine(QPointF(3.4, 2.5), QPointF(6.3, 3.4))
+            painter.drawLine(QPointF(10, 6), QPointF(10, 10))
+            painter.drawLine(QPointF(10, 10), QPointF(13, 12))
+        else:
+            for y, knob in ((5, 7), (10, 13), (15, 9)):
+                painter.drawLine(QPointF(3, y), QPointF(17, y))
+                painter.drawEllipse(QPointF(knob, y), 1.8, 1.8)
         painter.end()
         return QIcon(pixmap)

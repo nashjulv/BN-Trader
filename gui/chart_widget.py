@@ -22,6 +22,8 @@ class CandleStickItem(pg.GraphicsObject):
     def __init__(self, data: pd.DataFrame = None):
         pg.GraphicsObject.__init__(self)
         self.data = data if data is not None else pd.DataFrame()
+        self.up_color = QColor(Theme.c("buy"))
+        self.down_color = QColor(Theme.c("sell"))
         self.picture = None
         self.generate_picture()
 
@@ -49,11 +51,11 @@ class CandleStickItem(pg.GraphicsObject):
 
             # K线颜色
             if close_price >= open_price:
-                color = QColor(82, 196, 26)  # #52C41A
+                color = self.up_color
                 body_bottom = open_price
                 body_top = close_price
             else:
-                color = QColor(255, 77, 79)  # #FF4D4F
+                color = self.down_color
                 body_bottom = close_price
                 body_top = open_price
 
@@ -190,6 +192,11 @@ class ChartWidget(QWidget):
 
     def _apply_theme(self):
         t = Theme.colors()
+        self.candle_item.up_color = QColor(t["buy"])
+        self.candle_item.down_color = QColor(t["sell"])
+        if not self.df.empty:
+            self.candle_item.generate_picture()
+            self.candle_item.update()
         for plot in [self.plot_widget, self.volume_plot, self.indicator_plot]:
             plot.setBackground(QColor(t['chart_bg']))
             for axis_name in ("left", "bottom"):
@@ -220,11 +227,11 @@ class ChartWidget(QWidget):
         if up.any():
             self.volume_plot.addItem(pg.BarGraphItem(
                 x=x[up], height=volumes[up], width=0.8,
-                brush=pg.mkBrush("#52C41A88"), pen=None))
+                brush=pg.mkBrush(Theme.c("buy") + "88"), pen=None))
         if (~up).any():
             self.volume_plot.addItem(pg.BarGraphItem(
                 x=x[~up], height=volumes[~up], width=0.8,
-                brush=pg.mkBrush("#FF4D4F88"), pen=None))
+                brush=pg.mkBrush(Theme.c("sell") + "88"), pen=None))
 
         # 更新价格显示
         if not df.empty:
@@ -302,9 +309,9 @@ class ChartWidget(QWidget):
             self.indicator_plot.show()
             self.indicator_plot.setLabel("left", "RSI")
             self.indicator_plot.addItem(
-                pg.PlotDataItem(values, pen=pg.mkPen("#722ED1", width=1.5)))
-            self.indicator_plot.addLine(y=70, pen=pg.mkPen("#FF4D4F", style=Qt.PenStyle.DashLine))
-            self.indicator_plot.addLine(y=30, pen=pg.mkPen("#52C41A", style=Qt.PenStyle.DashLine))
+                pg.PlotDataItem(values, pen=pg.mkPen(Theme.c("ai_purple"), width=1.5)))
+            self.indicator_plot.addLine(y=70, pen=pg.mkPen(Theme.c("sell"), style=Qt.PenStyle.DashLine))
+            self.indicator_plot.addLine(y=30, pen=pg.mkPen(Theme.c("buy"), style=Qt.PenStyle.DashLine))
             self.indicator_plot.setYRange(0, 100)
 
         elif indicator == "MACD":
@@ -313,17 +320,17 @@ class ChartWidget(QWidget):
             self.indicator_plot.show()
             self.indicator_plot.setLabel("left", "MACD")
             self.indicator_plot.addItem(
-                pg.PlotDataItem(macd_line, pen=pg.mkPen("#1677FF", width=1.5)))
+                pg.PlotDataItem(macd_line, pen=pg.mkPen(Theme.c("accent"), width=1.5)))
             self.indicator_plot.addItem(
                 pg.PlotDataItem(signal_line, pen=pg.mkPen("#FA8C16", width=1.5)))
             hx = np.arange(len(hist))
             positive = hist >= 0
             self.indicator_plot.addItem(pg.BarGraphItem(
                 x=hx[positive], height=hist[positive], width=0.7,
-                brush=pg.mkBrush("#52C41A88"), pen=None))
+                brush=pg.mkBrush(Theme.c("buy") + "88"), pen=None))
             self.indicator_plot.addItem(pg.BarGraphItem(
                 x=hx[~positive], height=hist[~positive], width=0.7,
-                brush=pg.mkBrush("#FF4D4F88"), pen=None))
+                brush=pg.mkBrush(Theme.c("sell") + "88"), pen=None))
 
     def _calc_ema(self, data: np.ndarray, period: int) -> np.ndarray:
         """计算EMA"""

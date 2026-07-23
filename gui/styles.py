@@ -8,10 +8,10 @@ from PyQt6.QtGui import QColor
 # ====================================================================
 #  Design Tokens
 # ====================================================================
-R_PANEL  = "8px"
-R_BUTTON = "6px"
-R_INPUT  = "4px"
-R_CARD   = "8px"
+R_PANEL  = "10px"
+R_BUTTON = "8px"
+R_INPUT  = "6px"
+R_CARD   = "10px"
 
 FONT_SYSTEM = (
     '"Inter", "SF Pro Text", "PingFang SC", "Microsoft YaHei UI", '
@@ -27,61 +27,61 @@ FONT_NUMBER = (
 # ====================================================================
 LIGHT = {
     "name": "light",
-    "bg_main":    "#F5F7FA",
+    "bg_main":    "#F7F8FA",
     "bg_surface": "#FFFFFF",
     "bg_card":    "#FFFFFF",
     "bg_input":   "#FFFFFF",
-    "bg_hover":   "#F1F3F5",
-    "bg_pressed": "#E5E8EC",
-    "hover_border": "#C9CED6",
+    "bg_hover":   "#F2F4F7",
+    "bg_pressed": "#EAECF0",
+    "hover_border": "#D0D5DD",
     "bg_sidebar": "#FFFFFF",
 
-    "text_primary":   "#262626",
-    "text_secondary": "#8C8C8C",
-    "text_dim":       "#BFBFBF",
+    "text_primary":   "#1D2939",
+    "text_secondary": "#667085",
+    "text_dim":       "#98A2B3",
     "text_sidebar":   "#FFFFFF",
-    "text_sidebar_dim": "#7D8998",
+    "text_sidebar_dim": "#7C899A",
 
-    "accent":       "#1890FF",
-    "accent_dim":   "#096DD9",
-    "accent_glow":  "#40A9FF",
-    "accent_light": "#E6F4FF",
-    "secondary":    "#597EF7",
-    "ai_purple":    "#722ED1",
+    "accent":       "#1677FF",
+    "accent_dim":   "#0B66E4",
+    "accent_glow":  "#4096FF",
+    "accent_light": "#EAF3FF",
+    "secondary":    "#6172F3",
+    "ai_purple":    "#7F56D9",
 
-    "success": "#52C41A",
-    "danger":  "#FF4D4F",
-    "warning": "#FAAD14",
-    "info":    "#1890FF",
+    "success": "#22B573",
+    "danger":  "#F04452",
+    "warning": "#F79009",
+    "info":    "#1677FF",
 
-    "border":       "#E4E7EB",
-    "divider":      "#EEF0F2",
-    "border_focus": "#1890FF",
-    "border_active":"#096DD9",
+    "border":       "#E4E7EC",
+    "divider":      "#EAECF0",
+    "border_focus": "#1677FF",
+    "border_active":"#0B66E4",
 
-    "buy":  "#52C41A",
-    "sell": "#FF4D4F",
+    "buy":  "#22B573",
+    "sell": "#F04452",
 
     "scrollbar_bg":     "#F5F7FA",
     "scrollbar_handle": "#D9D9D9",
 
     "pnlbar_bg":     "#FFFFFF",
-    "pnlbar_border": "#E8E8E8",
+    "pnlbar_border": "#E4E7EC",
 
-    "tab_active":    "#1890FF",
+    "tab_active":    "#1677FF",
     "tab_active_bg": "#FFFFFF",
 
     "chart_bg":   "#FFFFFF",
     "chart_grid": "#F0F0F0",
 
     "progress_bg":    "#F0F0F0",
-    "progress_chunk": "#1890FF",
+    "progress_chunk": "#1677FF",
 
-    "tag_trade":  "#1890FF",
-    "tag_risk":   "#FA8C16",
-    "tag_system": "#595959",
-    "tip_bg":     "#FFFBE6",
-    "tip_border": "#FFE58F",
+    "tag_trade":  "#1677FF",
+    "tag_risk":   "#F79009",
+    "tag_system": "#667085",
+    "tip_bg":     "#FFFAEB",
+    "tip_border": "#FEDF89",
 }
 
 # ====================================================================
@@ -89,80 +89,80 @@ LIGHT = {
 # ====================================================================
 DARK = {
     "name": "dark",
-    "bg_main":    "#0D1117",
-    "bg_surface": "#161B22",
-    "bg_card":    "#1C2333",
-    "bg_input":   "#1C2333",
-    "bg_hover":   "#252D3A",
-    "bg_pressed": "#303947",
-    "hover_border": "#4A5565",
-    "bg_sidebar": "#0A0E14",
+    "bg_main":    "#000000",
+    "bg_surface": "#1C1C1E",
+    "bg_card":    "#1C1C1E",
+    "bg_input":   "#2C2C2E",
+    "bg_hover":   "#2C2C2E",
+    "bg_pressed": "#3A3A3C",
+    "hover_border": "#48484A",
+    "bg_sidebar": "#0B0B0C",
 
-    "text_primary":   "#E6EDF3",
-    "text_secondary": "#8B949E",
-    "text_dim":       "#586274",
-    "text_sidebar":   "#E6EDF3",
-    "text_sidebar_dim": "#586274",
+    "text_primary":   "#F5F5F7",
+    "text_secondary": "#A1A1A6",
+    "text_dim":       "#636366",
+    "text_sidebar":   "#F5F5F7",
+    "text_sidebar_dim": "#7C7C80",
 
-    "accent":       "#1890FF",
-    "accent_dim":   "#096DD9",
-    "accent_glow":  "#40A9FF",
-    "accent_light": "#111D2C",
-    "secondary":    "#4A6CFF",
-    "ai_purple":    "#A855F7",
+    "accent":       "#0A84FF",
+    "accent_dim":   "#0071E3",
+    "accent_glow":  "#409CFF",
+    "accent_light": "#102A43",
+    "secondary":    "#5E5CE6",
+    "ai_purple":    "#BF5AF2",
 
-    "success": "#3FB950",
-    "danger":  "#F85149",
-    "warning": "#D29922",
-    "info":    "#58A6FF",
+    "success": "#30D158",
+    "danger":  "#FF453A",
+    "warning": "#FF9F0A",
+    "info":    "#64D2FF",
 
-    "border":       "#30363D",
-    "divider":      "#21262D",
-    "border_focus": "#1890FF",
-    "border_active":"#096DD9",
+    "border":       "#38383A",
+    "divider":      "#2C2C2E",
+    "border_focus": "#0A84FF",
+    "border_active":"#0071E3",
 
-    "buy":  "#3FB950",
-    "sell": "#F85149",
+    "buy":  "#30D158",
+    "sell": "#FF453A",
 
-    "scrollbar_bg":     "#0D1117",
-    "scrollbar_handle": "#30363D",
+    "scrollbar_bg":     "#000000",
+    "scrollbar_handle": "#48484A",
 
-    "pnlbar_bg":     "#161B22",
-    "pnlbar_border": "#30363D",
+    "pnlbar_bg":     "#1C1C1E",
+    "pnlbar_border": "#38383A",
 
-    "tab_active":    "#1890FF",
-    "tab_active_bg": "#1C2333",
+    "tab_active":    "#0A84FF",
+    "tab_active_bg": "#1C1C1E",
 
-    "chart_bg":   "#0D1117",
-    "chart_grid": "#21262D",
+    "chart_bg":   "#000000",
+    "chart_grid": "#2C2C2E",
 
-    "progress_bg":    "#21262D",
-    "progress_chunk": "#1890FF",
+    "progress_bg":    "#2C2C2E",
+    "progress_chunk": "#0A84FF",
 
-    "tag_trade":  "#1890FF",
-    "tag_risk":   "#D29922",
-    "tag_system": "#8B949E",
-    "tip_bg":     "#2A2111",
-    "tip_border": "#5C4A1A",
+    "tag_trade":  "#0A84FF",
+    "tag_risk":   "#FF9F0A",
+    "tag_system": "#A1A1A6",
+    "tip_bg":     "#2B210E",
+    "tip_border": "#6B4B0B",
 }
 
 # ====================================================================
 #  Scene Colors
 # ====================================================================
 SCENE_COLORS = {
-    "TRENDING":  "#52C41A",
-    "RANGING":   "#1890FF",
-    "BREAKOUT":  "#FAAD14",
-    "REVERSAL":  "#722ED1",
-    "EXTREME":   "#FF4D4F",
+    "TRENDING":  "#22B573",
+    "RANGING":   "#1677FF",
+    "BREAKOUT":  "#F79009",
+    "REVERSAL":  "#7F56D9",
+    "EXTREME":   "#F04452",
 }
 
 SCENE_INFO = {
-    "TRENDING":  {"name": "趋势行情", "icon": "↗", "color": "#52C41A", "tip": "顺势交易 · 移动止损"},
-    "RANGING":   {"name": "震荡行情", "icon": "⇋", "color": "#1890FF", "tip": "高抛低吸 · 区间边界"},
-    "BREAKOUT":  {"name": "突破行情", "icon": "↑", "color": "#FAAD14", "tip": "突破跟进 · 确认放量"},
-    "REVERSAL":  {"name": "反转行情", "icon": "↺", "color": "#722ED1", "tip": "逆势试探 · 严格止损"},
-    "EXTREME":   {"name": "极端行情", "icon": "⚡", "color": "#FF4D4F", "tip": "观望为主 · 耐心等待"},
+    "TRENDING":  {"name": "趋势行情", "icon": "↗", "color": "#22B573", "tip": "顺势交易 · 移动止损"},
+    "RANGING":   {"name": "震荡行情", "icon": "⇋", "color": "#1677FF", "tip": "高抛低吸 · 区间边界"},
+    "BREAKOUT":  {"name": "突破行情", "icon": "↑", "color": "#F79009", "tip": "突破跟进 · 确认放量"},
+    "REVERSAL":  {"name": "反转行情", "icon": "↺", "color": "#7F56D9", "tip": "逆势试探 · 严格止损"},
+    "EXTREME":   {"name": "极端行情", "icon": "⚡", "color": "#F04452", "tip": "观望为主 · 耐心等待"},
 }
 
 
@@ -210,8 +210,8 @@ class Theme:
             "background": t["chart_bg"],
             "foreground": t["text_primary"],
             "grid": t["chart_grid"],
-            "candle_up":   QColor("#52C41A"),
-            "candle_down": QColor("#FF4D4F"),
+            "candle_up":   QColor(t["buy"]),
+            "candle_down": QColor(t["sell"]),
         }
 
     @classmethod
@@ -274,7 +274,7 @@ def _stylesheet(t: dict) -> str:
         color: #fff; border: none; font-weight: 600;
         min-height: 36px; padding: 6px 20px;
     }}
-    QPushButton#primaryBtn:hover {{ background-color: #1677E8; color:#fff; }}
+    QPushButton#primaryBtn:hover {{ background-color: {t["accent_dim"]}; color:#fff; }}
 
     QPushButton#buyBtn {{
         background-color: {t["buy"]};
@@ -282,7 +282,7 @@ def _stylesheet(t: dict) -> str:
         font-size: 15px; font-weight: 700;
         min-height: 44px; border-radius: {R_BUTTON};
     }}
-    QPushButton#buyBtn:hover {{ background-color: #49B817; color:#fff; }}
+    QPushButton#buyBtn:hover {{ background-color: {t["buy"]}; color:#fff; }}
 
     QPushButton#sellBtn {{
         background-color: {t["sell"]};
@@ -290,7 +290,7 @@ def _stylesheet(t: dict) -> str:
         font-size: 15px; font-weight: 700;
         min-height: 44px; border-radius: {R_BUTTON};
     }}
-    QPushButton#sellBtn:hover {{ background-color: #EF4547; color:#fff; }}
+    QPushButton#sellBtn:hover {{ background-color: {t["sell"]}; color:#fff; }}
 
     QPushButton#dangerBtn {{
         background-color: transparent; color: {t["danger"]};
