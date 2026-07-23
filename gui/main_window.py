@@ -19,7 +19,7 @@
 import logging
 from typing import Dict, Optional
 
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                QSplitter, QStackedWidget, QMessageBox, QStatusBar,
                                QLabel, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSettings
@@ -130,7 +130,6 @@ class MainWindow(QMainWindow):
 
         self._init_ui()
         self._apply_global_settings(load_global_settings(), announce=False)
-        self.pnl_bar.set_strategy_ready(self._strategy_configured)
         self.pnl_bar.set_api_status(self.client.has_keys())
 
         self.account_sync.balances_updated.connect(self._on_balances_updated)
@@ -246,8 +245,6 @@ class MainWindow(QMainWindow):
         self.pnl_bar.theme_toggled.connect(self._on_theme_toggled)
         self.pnl_bar.api_settings_clicked.connect(
             lambda: self._on_sidebar_nav("settings"))
-        self.pnl_bar.strategy_settings_clicked.connect(
-            lambda: self._on_sidebar_nav("strategy"))
         self.pnl_bar.symbol_changed.connect(self._on_symbol_changed)
         layout.addWidget(self.pnl_bar)
 
@@ -370,7 +367,11 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _apply_theme(self):
-        self.setStyleSheet(Theme.stylesheet())
+        # 使用应用级样式，确保 QMessageBox 和所有顶层 QDialog 也继承主题。
+        app = QApplication.instance()
+        if app:
+            app.setStyleSheet(Theme.stylesheet())
+        self.setStyleSheet("")
         t = Theme.colors()
         self.body_splitter.setStyleSheet(
             f"QSplitter {{ background:transparent; }} "
@@ -468,7 +469,7 @@ class MainWindow(QMainWindow):
 
             if df is not None and not df.empty:
                 self.current_klines = df
-                self.chart_widget.update_data(df)
+                self.chart_widget.update_data(df, current_price=price)
                 self.trade_panel.update_price(price)
 
                 df_ind = calculate_all_indicators(df.copy())
@@ -612,7 +613,7 @@ class MainWindow(QMainWindow):
         task = self.automation_manager.get(task_id)
         self._auto_trading = True
         self.pnl_bar.set_auto_mode(True)
-        self.trade_panel.setEnabled(False)
+        self.trade_panel.set_manual_enabled(False)
         self.automation_page.add_log(f"已手动启动：{task.name}")
         self.log_panel.add_system_log(f"自动任务启动: {task.name}")
         self.automation_page.refresh()
@@ -648,7 +649,7 @@ class MainWindow(QMainWindow):
             return
         self._auto_trading = True
         self.pnl_bar.set_auto_mode(True)
-        self.trade_panel.setEnabled(False)
+        self.trade_panel.set_manual_enabled(False)
         self.automation_page.add_log("已由客户手动启动全部任务")
         self.log_panel.add_system_log("全部自动化任务已启动")
         self.automation_page.refresh()
@@ -664,7 +665,7 @@ class MainWindow(QMainWindow):
         active = self.automation_manager.running_count() > 0
         self._auto_trading = active
         self.pnl_bar.set_auto_mode(active)
-        self.trade_panel.setEnabled(not active)
+        self.trade_panel.set_manual_enabled(not active)
 
     def _automation_tick(self):
         if not self._auto_trading:
@@ -815,7 +816,7 @@ class MainWindow(QMainWindow):
             return
         if auto:
             self._auto_trading = True
-            self.trade_panel.setEnabled(False)
+            self.trade_panel.set_manual_enabled(False)
             self._on_sidebar_nav("automation")
             self.automation_page.add_log(
                 "已进入自动模式；请选择任务并手动启动")
@@ -824,13 +825,12 @@ class MainWindow(QMainWindow):
         else:
             self.automation_manager.stop_all()
             self._auto_trading = False
-            self.trade_panel.setEnabled(True)
+            self.trade_panel.set_manual_enabled(True)
             self.automation_page.refresh()
             self.log_panel.add_system_log("已切换为手动模式")
 
     def _on_strategy_saved(self):
         self._strategy_configured = True
-        self.pnl_bar.set_strategy_ready(True)
         self._apply_saved_strategy_params()
         self.log_panel.add_system_log("策略参数已更新")
 

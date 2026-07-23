@@ -15,14 +15,12 @@ class PnlBar(QWidget):
     mode_changed = pyqtSignal(bool)
     theme_toggled = pyqtSignal(str)
     api_settings_clicked = pyqtSignal()
-    strategy_settings_clicked = pyqtSignal()
     symbol_changed = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
         self.setFixedHeight(48)
         self._auto_mode = False
-        self._settings_ready = False
         self._api_ok = False
         self._init_ui()
         self._restyle()
@@ -82,14 +80,6 @@ class PnlBar(QWidget):
         layout.addLayout(col3[0])
 
         layout.addStretch()
-
-        # --- 策略状态指示 ---
-        self.strategy_btn = QPushButton("策略")
-        self.strategy_btn.setFixedHeight(30)
-        self.strategy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.strategy_btn.setToolTip("设定策略参数")
-        self.strategy_btn.clicked.connect(self.strategy_settings_clicked.emit)
-        layout.addWidget(self.strategy_btn)
 
         # --- 主题 ---
         self.theme_btn = QPushButton("暗" if Theme.is_dark() else "明")
@@ -168,27 +158,8 @@ class PnlBar(QWidget):
         sym = text.replace("/", "")
         self.symbol_changed.emit(sym)
 
-    def set_strategy_ready(self, ready: bool):
-        self._settings_ready = ready
-        self._update_strategy_btn()
-
     def set_global_ready(self, ready: bool):
         pass
-
-    def _update_strategy_btn(self):
-        t = Theme.colors()
-        if self._settings_ready:
-            self.strategy_btn.setText("策略 ✓")
-            self.strategy_btn.setStyleSheet(
-                f"color:{t['success']}; font-size:12px; font-weight:600; "
-                f"border:1px solid {t['success']}; border-radius:4px; "
-                f"background:transparent; padding:4px 10px;")
-        else:
-            self.strategy_btn.setText("策略")
-            self.strategy_btn.setStyleSheet(
-                f"color:{t['text_secondary']}; font-size:12px; "
-                f"border:1px solid {t['border']}; border-radius:4px; "
-                f"background:transparent; padding:4px 10px;")
 
     def _restyle(self):
         t = Theme.colors()
@@ -206,7 +177,6 @@ class PnlBar(QWidget):
         for sep in self.findChildren(QFrame, "sep"):
             sep.setStyleSheet(f"background:{t['divider']}; border:none;")
         self._update_mode_btn()
-        self._update_strategy_btn()
         self.set_api_status(self._api_ok)
 
     # ------- 数据更新 -------

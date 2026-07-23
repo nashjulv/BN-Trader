@@ -6,6 +6,7 @@ K线图组件
 
 import numpy as np
 import pandas as pd
+import math
 from typing import Dict, List, Optional, Tuple
 
 import pyqtgraph as pg
@@ -15,6 +16,51 @@ from PyQt6.QtGui import QColor
 
 from gui.styles import Theme
 from config import Config
+
+
+def price_precision(value: float) -> int:
+    """按价格量级保留可读且不会掩盖窄幅波动的精度。"""
+    value = abs(float(value))
+    if value >= 100:
+        return 2
+    if value >= 1:
+        return 4
+    if value >= 0.01:
+        return 6
+    return 8
+
+
+def format_price(value: float, precision: int = None) -> str:
+    precision = price_precision(value) if precision is None else precision
+    return f"{float(value):,.{precision}f}"
+
+
+class PriceAxisItem(pg.AxisItem):
+    """禁用科学计数法，并按当前交易对价格范围显示小数。"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._reference_price = 0.0
+        self.enableAutoSIPrefix(False)
+
+    def set_reference_price(self, value: float):
+        self._reference_price = float(value)
+        self.picture = None
+        self.update()
+
+    def tickStrings(self, values, scale, spacing):
+        reference = self._reference_price or next(
+            (abs(float(value)) for value in values if value), 0.0
+        )
+        base = price_precision(reference)
+        if spacing:
+            spacing_precision = max(
+                0, int(math.ceil(-math.log10(abs(float(spacing)))))
+            )
+        else:
+            spacing_precision = base
+        precision = min(8, max(base, spacing_precision))
+        return [format_price(value, precision) for value in values]
 
 
 class CandleStickItem(pg.GraphicsObject):
@@ -30,6 +76,7 @@ class CandleStickItem(pg.GraphicsObject):
 
     def set_data(self, data: pd.DataFrame):
         """设置数据"""
+        self.prepareGeometryChange()
         self.data = data
         self.generate_picture()
         self.update()
@@ -85,8 +132,13 @@ class CandleStickItem(pg.GraphicsObject):
             painter.drawPicture(0, 0, self.picture)
 
     def boundingRect(self):
-        if self.picture:
-            return pg.QtCore.QRectF(self.picture.boundingRect())
+        if not self.data.empty:
+            low = float(self.data["low"].min())
+            high = float(self.data["high"].max())
+            height = max(high - low, max(abs(high), 1.0) * 1e-8)
+            return pg.QtCore.QRectF(
+                -0.5, low, max(float(len(self.data)), 1.0), height
+            )
         return pg.QtCore.QRectF(0, 0, 0, 0)
 
 
@@ -150,9 +202,12 @@ class ChartWidget(QWidget):
         layout.addLayout(control_bar)
 
         # 图表区域
-        self.plot_widget = pg.PlotWidget()
+        self.price_axis = PriceAxisItem(orientation="right")
+        self.plot_widget = pg.PlotWidget(
+            axisItems={"right": self.price_axis}
+        )
         self.plot_widget.setBackground(QColor(Theme.c('bg_main')))
-        self.plot_widget.setLabel("left", "价格")
+        self.plot_widget.setLabel("right", "价格")
         self.plot_widget.setLabel("bottom", "时间")
         self.plot_widget.showGrid(x=True, y=True, alpha=0.3)
 
@@ -164,7 +219,18 @@ class ChartWidget(QWidget):
         self._empty_text.setPos(0, 0)
         self.plot_widget.addItem(self._empty_text)
         self.plot_widget.hideAxis("left")
+        self.plot_widget.hideAxis("right")
         self.plot_widget.hideAxis("bottom")
+        self.current_price_line = pg.InfiniteLine(
+            angle=0,
+            movable=False,
+            pen=pg.mkPen(
+                Theme.c("accent"), width=1,
+                style=Qt.PenStyle.DashLine,
+            ),
+        )
+        self.current_price_line.hide()
+        self.plot_widget.addItem(self.current_price_line)
 
         # 指标线
         self.indicator_lines: Dict[str, pg.PlotDataItem] = {}
@@ -203,10 +269,23 @@ class ChartWidget(QWidget):
                 axis = plot.getAxis(axis_name)
                 axis.setPen(pg.mkPen(t["border"]))
                 axis.setTextPen(pg.mkPen(t["text_secondary"]))
+        self.price_axis.setPen(pg.mkPen(t["border"]))
+        self.price_axis.setTextPen(pg.mkPen(t["text_secondary"]))
+        self.current_price_line.setPen(pg.mkPen(
+            t["accent"], width=1, style=Qt.PenStyle.DashLine
+        ))
+        if not self.df.empty:
+            last_price = float(self.df["close"].iloc[-1])
+            self.price_label.setStyleSheet(
+                f"color:{t['accent']}; font-size:16px; font-weight:700;"
+            )
+            self.price_axis.set_reference_price(last_price)
         if self._empty_text:
             self._empty_text.setColor(QColor(t["text_secondary"]))
 
-    def update_data(self, df: pd.DataFrame):
+    def update_data(
+        self, df: pd.DataFrame, current_price: Optional[float] = None
+    ):
         """更新K线数据"""
         if df.empty:
             return
@@ -214,7 +293,7 @@ class ChartWidget(QWidget):
         self.df = df
         if self._empty_text:
             self._empty_text.hide()
-        self.plot_widget.showAxis("left")
+        self.plot_widget.showAxis("right")
         self.plot_widget.showAxis("bottom")
         self.candle_item.set_data(df)
         self.volume_plot.clear()
@@ -235,8 +314,18 @@ class ChartWidget(QWidget):
 
         # 更新价格显示
         if not df.empty:
-            last_price = df["close"].iloc[-1]
-            self.price_label.setText(f"{last_price:.2f}")
+            candle_close = float(df["close"].iloc[-1])
+            display_price = (
+                float(current_price)
+                if current_price is not None and float(current_price) > 0
+                else candle_close
+            )
+            self.price_axis.set_reference_price(display_price)
+            self.price_label.setText(
+                f"{format_price(display_price)} USDT"
+            )
+            self.current_price_line.setValue(display_price)
+            self.current_price_line.show()
 
         # 自动缩放
         self.plot_widget.autoRange()

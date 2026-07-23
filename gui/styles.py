@@ -231,6 +231,14 @@ def _stylesheet(t: dict) -> str:
     QMainWindow {{
         background-color: {t["bg_main"]};
     }}
+    QDialog, QMessageBox {{
+        background-color: {t["bg_main"]};
+        color: {t["text_primary"]};
+    }}
+    QDialog QLabel, QMessageBox QLabel {{
+        background-color: transparent;
+        color: {t["text_primary"]};
+    }}
     QWidget {{
         color: {t["text_primary"]};
         font-size: 12px;
@@ -320,7 +328,8 @@ def _stylesheet(t: dict) -> str:
     QLabel#captionLabel {{ font-size: 12px; color: {t["text_secondary"]}; }}
     QLabel#dimLabel     {{ font-size: 11px; color: {t["text_dim"]}; }}
 
-    QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox {{
+    QLineEdit, QDoubleSpinBox, QSpinBox, QComboBox,
+    QTextEdit, QPlainTextEdit {{
         background-color: {t["bg_input"]};
         color: {t["text_primary"]};
         border: 1px solid {t["border"]};
@@ -329,7 +338,8 @@ def _stylesheet(t: dict) -> str:
         min-height: 28px;
         font-size: 12px;
     }}
-    QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus, QComboBox:focus {{
+    QLineEdit:focus, QDoubleSpinBox:focus, QSpinBox:focus, QComboBox:focus,
+    QTextEdit:focus, QPlainTextEdit:focus {{
         border-color: {t["border_focus"]};
     }}
     QComboBox::drop-down  {{ border: none; width: 20px; }}

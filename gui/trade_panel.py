@@ -5,7 +5,7 @@
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QComboBox, QDoubleSpinBox,
-                               QFrame, QButtonGroup)
+                               QFrame, QButtonGroup, QMessageBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui.styles import Theme
@@ -19,6 +19,7 @@ class TradePanel(QWidget):
         super().__init__()
         self.setMinimumWidth(240)
         self._available = 0.0
+        self._last_price = 0.0
         self._init_ui()
         self._refresh_theme()
 
@@ -36,6 +37,13 @@ class TradePanel(QWidget):
         self._title = QLabel("手动下单")
         self._title.setObjectName("sectionTitle")
         layout.addWidget(self._title)
+        self.mode_hint = QLabel(
+            "自动模式运行中，手动下单已暂停。切换为手动模式后可继续操作。"
+        )
+        self.mode_hint.setObjectName("tradeModeHint")
+        self.mode_hint.setWordWrap(True)
+        self.mode_hint.hide()
+        layout.addWidget(self.mode_hint)
 
         # 交易对
         self.symbol_combo = QComboBox()
@@ -127,16 +135,16 @@ class TradePanel(QWidget):
         # 买卖按钮
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        buy = QPushButton("买入 / 做多")
-        buy.setObjectName("buyBtn")
-        buy.setCursor(Qt.CursorShape.PointingHandCursor)
-        buy.clicked.connect(lambda: self._submit_order("BUY"))
-        sell = QPushButton("卖出 / 做空")
-        sell.setObjectName("sellBtn")
-        sell.setCursor(Qt.CursorShape.PointingHandCursor)
-        sell.clicked.connect(lambda: self._submit_order("SELL"))
-        btn_row.addWidget(buy)
-        btn_row.addWidget(sell)
+        self.buy_btn = QPushButton("买入 / 做多")
+        self.buy_btn.setObjectName("buyBtn")
+        self.buy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.buy_btn.clicked.connect(lambda: self._submit_order("BUY"))
+        self.sell_btn = QPushButton("卖出 / 做空")
+        self.sell_btn.setObjectName("sellBtn")
+        self.sell_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sell_btn.clicked.connect(lambda: self._submit_order("SELL"))
+        btn_row.addWidget(self.buy_btn)
+        btn_row.addWidget(self.sell_btn)
         layout.addLayout(btn_row)
 
         # 费用预估
@@ -166,6 +174,11 @@ class TradePanel(QWidget):
             btn.setStyleSheet(
                 f"font-size:12px; padding:2px; border:1px solid {t['border']}; "
                 f"border-radius:4px; background:transparent; color:{t['text_secondary']};")
+        self.mode_hint.setStyleSheet(
+            f"color:{t['warning']}; background:{t['tip_bg']}; "
+            f"border:1px solid {t['tip_border']}; border-radius:6px; "
+            "padding:7px; font-size:11px;"
+        )
 
     def _style_type_btn(self, btn: QPushButton, active: bool):
         t = Theme.colors()
@@ -189,7 +202,14 @@ class TradePanel(QWidget):
         self.qty_cap.setText(f"数量 ({base})")
 
     def update_price(self, price: float):
-        self.price_label.setText(f"{price:,.2f}")
+        self._last_price = float(price)
+        decimals = self._price_decimals(price)
+        for control in (
+            self.price_input, self.take_profit_input, self.stop_loss_input
+        ):
+            control.setDecimals(decimals)
+            control.setSingleStep(10 ** -decimals)
+        self.price_label.setText(f"{price:,.{decimals}f}")
         if not self.price_input.hasFocus():
             self.price_input.setValue(price)
 
@@ -220,5 +240,40 @@ class TradePanel(QWidget):
         sl = self.stop_loss_input.value()
         tp = self.take_profit_input.value()
         if qty <= 0:
+            QMessageBox.warning(
+                self, "无法下单",
+                "请输入交易数量，或使用 25% / 50% / 75% / 100% 快捷按钮。"
+            )
+            self.qty_input.setFocus()
+            return
+        if price <= 0:
+            QMessageBox.warning(
+                self, "无法下单", "当前价格无效，请等待行情更新后重试。"
+            )
             return
         self.place_order.emit(sym, side, qty, price, sl, tp)
+
+    def set_manual_enabled(self, enabled: bool):
+        """锁定下单控件时保留明确说明，避免整栏看似失效。"""
+        controls = [
+            self.symbol_combo, self._limit_btn, self._market_btn,
+            self.price_input, self.qty_input,
+            self.take_profit_input, self.stop_loss_input,
+            self.buy_btn, self.sell_btn, *self._pct_btns,
+        ]
+        for control in controls:
+            control.setEnabled(enabled)
+        if enabled and self._market_btn.isChecked():
+            self.price_input.setEnabled(False)
+        self.mode_hint.setVisible(not enabled)
+
+    @staticmethod
+    def _price_decimals(price: float) -> int:
+        price = abs(float(price))
+        if price >= 100:
+            return 2
+        if price >= 1:
+            return 4
+        if price >= 0.01:
+            return 6
+        return 8
