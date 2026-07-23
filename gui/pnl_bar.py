@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
 from PyQt6.QtCore import pyqtSignal, Qt
 
 from gui.styles import Theme
+from config import Config
 
 
 class PnlBar(QWidget):
@@ -44,7 +45,8 @@ class PnlBar(QWidget):
         # --- 交易对 ---
         self.symbol_combo = QComboBox()
         self.symbol_combo.addItems([
-            "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT"
+            symbol.removesuffix("USDT") + "/USDT"
+            for symbol in Config.DEFAULT_SYMBOLS
         ])
         self.symbol_combo.setFixedWidth(110)
         self.symbol_combo.setFixedHeight(30)
@@ -146,6 +148,13 @@ class PnlBar(QWidget):
 
     def is_auto_mode(self) -> bool:
         return self._auto_mode
+
+    def set_auto_mode(self, enabled: bool):
+        self._auto_mode = enabled
+        self.auto_btn.blockSignals(True)
+        self.auto_btn.setChecked(enabled)
+        self.auto_btn.blockSignals(False)
+        self._update_mode_btn()
 
     # ------- 主题 -------
 

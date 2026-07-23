@@ -1,6 +1,6 @@
 """
 左侧图标导航栏 — 匹配 UI 设计稿
-主页 / 策略 / 资金 / 风控 / 持仓 / 日志 / 回测 / 设置
+主页 / 自动化 / 策略 / 资金 / 风控 / 持仓 / 日志 / 回测 / 帮助 / 设置
 """
 
 from typing import Dict, List, Tuple
@@ -19,6 +19,7 @@ from gui.styles import Theme
 # (key, icon_char, tooltip)
 NAV_ITEMS: List[Tuple[str, str, str]] = [
     ("dashboard", "⌂",  "主界面"),
+    ("automation", "◇", "自动化投资任务台"),
     ("strategy",  "◈",  "策略设置"),
     ("capital",   "◎",  "资金概览"),
     ("risk",      "⬡",  "风控设置"),
@@ -30,7 +31,7 @@ NAV_ITEMS: List[Tuple[str, str, str]] = [
 ]
 
 NAV_LABELS = {
-    "dashboard": "行情", "strategy": "策略", "capital": "资金",
+    "dashboard": "行情", "automation": "自动", "strategy": "策略", "capital": "资金",
     "risk": "风控", "position": "持仓", "logs": "日志",
     "backtest": "复盘", "help": "帮助", "settings": "设置",
 }
@@ -148,6 +149,13 @@ class SideBar(QWidget):
             painter.drawRoundedRect(QRectF(4, 10, 2.5, 5), 1, 1)
             painter.drawRoundedRect(QRectF(8.8, 6, 2.5, 9), 1, 1)
             painter.drawRoundedRect(QRectF(13.5, 3, 2.5, 12), 1, 1)
+        elif key == "automation":
+            painter.drawEllipse(QPointF(5, 5), 2.2, 2.2)
+            painter.drawEllipse(QPointF(15, 5), 2.2, 2.2)
+            painter.drawEllipse(QPointF(10, 15), 2.2, 2.2)
+            painter.drawLine(QPointF(7.2, 5.8), QPointF(12.8, 5.8))
+            painter.drawLine(QPointF(6.4, 7), QPointF(8.8, 12.9))
+            painter.drawLine(QPointF(13.6, 7), QPointF(11.2, 12.9))
         elif key == "strategy":
             path = QPainterPath(QPointF(3, 14))
             path.lineTo(7, 10)

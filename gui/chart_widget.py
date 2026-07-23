@@ -14,6 +14,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 
 from gui.styles import Theme
+from config import Config
 
 
 class CandleStickItem(pg.GraphicsObject):
@@ -120,8 +121,7 @@ class ChartWidget(QWidget):
         control_bar.addWidget(title)
 
         self.symbol_combo = QComboBox()
-        self.symbol_combo.addItems(
-            ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"])
+        self.symbol_combo.addItems(Config.DEFAULT_SYMBOLS)
         self.symbol_combo.setFixedWidth(110)
         self.symbol_combo.currentTextChanged.connect(self._on_symbol_changed)
         control_bar.addWidget(self.symbol_combo)

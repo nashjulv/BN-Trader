@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui.styles import Theme
+from config import Config
 
 
 class TradePanel(QWidget):
@@ -38,9 +39,7 @@ class TradePanel(QWidget):
 
         # 交易对
         self.symbol_combo = QComboBox()
-        self.symbol_combo.addItems([
-            "BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT"
-        ])
+        self.symbol_combo.addItems(Config.DEFAULT_SYMBOLS)
         layout.addWidget(self.symbol_combo)
 
         # 限价 / 市价 Tab 按钮

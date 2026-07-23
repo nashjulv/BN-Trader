@@ -47,6 +47,7 @@ from gui.global_settings_dialog import (RiskSettingsPage, PositionSettingsPage,
                                           load_global_settings)
 from gui.review_dialog import ReviewDialog
 from gui.help_center import HelpCenterPage
+from gui.automation_page import AutomationPage
 
 from services.binance_client import BinanceClient
 from services.account_sync import AccountSyncService
@@ -54,6 +55,10 @@ from services.scene_detector import SceneDetector, Scene
 from services.capital_pool import CapitalPool
 from services.risk_manager import RiskManager, RiskCheck
 from services.strategy_engine import StrategyEngine
+from services.automation_manager import (
+    AutomationManager, RUNNING, EVALUATING
+)
+from services.automation_worker import AutomationEvaluationWorker
 from strategies.base import SignalType
 
 from indicators.technical import calculate_all_indicators
@@ -109,6 +114,8 @@ class MainWindow(QMainWindow):
         self.capital_pool = CapitalPool()
         self.risk_manager = RiskManager()
         self.strategy_engine = StrategyEngine()
+        self.automation_manager = AutomationManager()
+        self.automation_worker: Optional[AutomationEvaluationWorker] = None
 
         self.data_worker: Optional[DataWorker] = None
         self.current_symbol = "BTCUSDT"
@@ -116,7 +123,7 @@ class MainWindow(QMainWindow):
         self.current_klines: Optional[pd.DataFrame] = None
         self.current_scene: Optional[Scene] = None
         self.positions = []
-        self._last_auto_signal = None
+        self._last_auto_signals = {}
         self._auto_trading = False
         self._strategy_configured = self._check_strategy_configured()
         self._apply_saved_strategy_params()
@@ -139,6 +146,10 @@ class MainWindow(QMainWindow):
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._periodic_update)
         self.update_timer.start(1000)
+
+        self.automation_timer = QTimer()
+        self.automation_timer.timeout.connect(self._automation_tick)
+        self.automation_timer.start(1000)
 
         logger.info("主窗口初始化完成")
 
@@ -166,6 +177,16 @@ class MainWindow(QMainWindow):
         self._pages = {}
         self._pages["dashboard"] = self._build_dashboard()
         self.page_stack.addWidget(self._pages["dashboard"])
+
+        self.automation_page = AutomationPage(self.automation_manager)
+        self.automation_page.start_requested.connect(self._start_automation_task)
+        self.automation_page.stop_requested.connect(self._stop_automation_task)
+        self.automation_page.start_all_requested.connect(
+            self._start_all_automation_tasks)
+        self.automation_page.stop_all_requested.connect(
+            self._stop_all_automation_tasks)
+        self._pages["automation"] = self.automation_page
+        self.page_stack.addWidget(self._pages["automation"])
 
         self._pages["strategy"] = StrategySettingsPage()
         self._pages["strategy"].settings_saved.connect(self._on_strategy_saved)
@@ -336,6 +357,7 @@ class MainWindow(QMainWindow):
         else:
             names = {
                 "strategy": "策略设置", "capital": "资金设置",
+                "automation": "自动化任务台",
                 "risk": "风控设置", "position": "持仓设置",
                 "logs": "日志详情", "backtest": "回测",
                 "help": "帮助中心",
@@ -380,7 +402,7 @@ class MainWindow(QMainWindow):
 
         for page in [self._pages.get("strategy"), self._pages.get("risk"),
                       self._pages.get("position"), self._pages.get("capital"),
-                      self.api_page, self.help_page]:
+                      self.api_page, self.help_page, self.automation_page]:
             if page and hasattr(page, '_refresh_theme'):
                 page._refresh_theme()
 
@@ -465,9 +487,6 @@ class MainWindow(QMainWindow):
                 self._status_scene.setText(
                     f"{scene.type} ({scene.confidence:.0%})")
 
-                if self._auto_trading:
-                    self._auto_trade_check(df_ind, scene)
-
             self._update_all_panels()
             t = Theme.colors()
             ok = self.client.has_keys()
@@ -501,15 +520,24 @@ class MainWindow(QMainWindow):
         self._execute_order(symbol, side, qty, price, sl, tp, confirm=True)
 
     def _execute_order(self, symbol, side, qty, price, sl=0, tp=0,
-                       confirm: bool = False, automatic: bool = False):
+                       confirm: bool = False, automatic: bool = False,
+                       task_id: str = ""):
         check = self.risk_manager.check_trade_permission(
             self.capital_pool.total, qty * price, price, sl)
         if not check.allowed:
-            self._show_risk_warning(check)
+            if automatic:
+                self.log_panel.add_risk_log(
+                    f"自动任务被风控拦截: {check.message}", check.level)
+            else:
+                self._show_risk_warning(check)
             return False
         can, reason = self.capital_pool.can_trade()
         if not can:
-            QMessageBox.warning(self, "交易禁止", reason)
+            if automatic:
+                self.log_panel.add_risk_log(
+                    f"自动任务停止执行: {reason}", "STOP")
+            else:
+                QMessageBox.warning(self, "交易禁止", reason)
             return False
         # 0=限价 1=市价
         order_type = (
@@ -560,31 +588,193 @@ class MainWindow(QMainWindow):
             "pnl": 0.0,
             "pnl_ratio": 0.0,
             "automatic": automatic,
+            "task_id": task_id,
         })
         self._update_all_panels()
         return True
 
-    def _auto_trade_check(self, df, scene):
-        if not self.capital_pool.can_trade()[0]:
+    # ==================================================================
+    #  自动化任务台
+    # ==================================================================
+
+    def _start_automation_task(self, task_id: str):
+        if not self._strategy_configured:
+            QMessageBox.information(
+                self, "请先配置策略",
+                "启动自动化任务前，请先保存策略参数。")
+            self._on_sidebar_nav("strategy")
             return
-        if scene.type not in getattr(self, "_enabled_strategies", set()):
+        try:
+            self.automation_manager.start(task_id)
+        except ValueError as error:
+            QMessageBox.warning(self, "无法启动", str(error))
             return
-        s = self.strategy_engine.generate_signal(df, scene)
-        if s and s.type in (SignalType.BUY, SignalType.SELL):
-            signal_key = (s.symbol, s.type.value, round(s.price, 4), s.reason)
-            if signal_key == self._last_auto_signal:
-                return
-            cap = self.capital_pool.allocate_for_trade(scene.type, s.confidence)
-            if cap > 0:
-                side = "BUY" if s.type == SignalType.BUY else "SELL"
-                qty = cap / s.price if s.price > 0 else 0
-                if qty > 0 and self._execute_order(
-                        s.symbol, side, qty, s.price, s.stop_loss, s.take_profit,
-                        confirm=False, automatic=True):
-                    self._last_auto_signal = signal_key
-                    self.log_panel.add_trade_log(
-                        f"自动信号: {side} {s.symbol}@{s.price:.2f} · {s.reason}",
-                        "SUCCESS")
+        task = self.automation_manager.get(task_id)
+        self._auto_trading = True
+        self.pnl_bar.set_auto_mode(True)
+        self.trade_panel.setEnabled(False)
+        self.automation_page.add_log(f"已手动启动：{task.name}")
+        self.log_panel.add_system_log(f"自动任务启动: {task.name}")
+        self.automation_page.refresh()
+
+    def _stop_automation_task(self, task_id: str):
+        task = self.automation_manager.get(task_id)
+        self.automation_manager.stop(task_id)
+        if task:
+            self.automation_page.add_log(f"已停止：{task.name}")
+            self.log_panel.add_system_log(f"自动任务停止: {task.name}")
+        self._sync_automation_master_state()
+        self.automation_page.refresh()
+
+    def _start_all_automation_tasks(self):
+        if not self._strategy_configured:
+            QMessageBox.information(
+                self, "请先配置策略",
+                "启动自动化任务前，请先保存策略参数。")
+            self._on_sidebar_nav("strategy")
+            return
+        try:
+            self.automation_manager.validate_allocations()
+            enabled_tasks = [
+                task for task in self.automation_manager.tasks
+                if self.automation_manager.allocation_for(task.symbol)
+            ]
+            if not enabled_tasks:
+                raise ValueError("没有可启动的投资币种或自动化任务")
+            for task in enabled_tasks:
+                self.automation_manager.start(task.id)
+        except ValueError as error:
+            QMessageBox.warning(self, "无法启动全部任务", str(error))
+            return
+        self._auto_trading = True
+        self.pnl_bar.set_auto_mode(True)
+        self.trade_panel.setEnabled(False)
+        self.automation_page.add_log("已由客户手动启动全部任务")
+        self.log_panel.add_system_log("全部自动化任务已启动")
+        self.automation_page.refresh()
+
+    def _stop_all_automation_tasks(self):
+        self.automation_manager.stop_all()
+        self.automation_page.add_log("已停止全部自动化任务")
+        self.log_panel.add_system_log("全部自动化任务已停止")
+        self._sync_automation_master_state()
+        self.automation_page.refresh()
+
+    def _sync_automation_master_state(self):
+        active = self.automation_manager.running_count() > 0
+        self._auto_trading = active
+        self.pnl_bar.set_auto_mode(active)
+        self.trade_panel.setEnabled(not active)
+
+    def _automation_tick(self):
+        if not self._auto_trading:
+            return
+        task = self.automation_manager.due_task()
+        if not task:
+            return
+        self.automation_manager.mark_evaluating(task.id)
+        self.automation_page.refresh()
+        self.automation_page.add_log(
+            f"{task.symbol} · 开始评估 {task.strategy} 策略")
+        self.automation_worker = AutomationEvaluationWorker(
+            task, load_strategy_settings())
+        self.automation_worker.evaluated.connect(
+            self._on_automation_evaluated)
+        self.automation_worker.finished.connect(
+            self._on_automation_worker_finished)
+        self.automation_worker.start()
+
+    def _on_automation_worker_finished(self):
+        worker = self.automation_worker
+        self.automation_worker = None
+        if worker:
+            worker.deleteLater()
+
+    def _on_automation_evaluated(self, task_id: str, result: dict):
+        task = self.automation_manager.get(task_id)
+        if not task:
+            return
+        was_stopped = task.status == "STOPPED"
+        ok = bool(result.get("ok"))
+        message = result.get("message", "评估完成")
+        self.automation_manager.finish_evaluation(
+            task_id, message, success=ok)
+        if was_stopped:
+            self.automation_page.add_log(
+                f"{task.symbol} · 任务已停止，本轮结果已忽略")
+            self._sync_automation_master_state()
+            self.automation_page.refresh()
+            return
+        self.automation_page.add_log(f"{task.symbol} · {message}")
+
+        signal = result.get("signal")
+        if ok and signal:
+            signal_key = (
+                signal["side"], round(signal["price"], 6), signal["reason"]
+            )
+            if self._last_auto_signals.get(task_id) != signal_key:
+                self._execute_automation_signal(task, result, signal, signal_key)
+        elif not ok:
+            self.log_panel.add_system_log(
+                f"自动任务异常 {task.name}: {message}", "ERROR")
+        self._sync_automation_master_state()
+        self.automation_page.refresh()
+
+    def _execute_automation_signal(
+        self, task, result: dict, signal: dict, signal_key
+    ):
+        allocation = self.automation_manager.allocation_for(task.symbol)
+        if not allocation:
+            self.automation_page.add_log(
+                f"{task.symbol} · 资金分配已停用，未下单")
+            return
+        task_budget = self.capital_pool.total * allocation.allocation_ratio
+        used = sum(
+            position.get("capital_used", 0)
+            for position in self.positions
+            if position.get("automatic")
+            and position.get("symbol") == task.symbol
+        )
+        remaining_budget = max(0.0, task_budget - used)
+        task_order_limit = task_budget * task.per_trade_ratio
+        scene_limit = self.capital_pool.allocate_for_trade(
+            result.get("scene", "RANGING"),
+            float(result.get("confidence", 0.5)),
+        )
+        effective_available = max(
+            0.0,
+            self.capital_pool.available
+            - self.capital_pool.locked
+            - self.capital_pool.margin,
+        )
+        amount = min(
+            remaining_budget, task_order_limit,
+            scene_limit, effective_available,
+        )
+        if amount <= 0:
+            self.automation_page.add_log(
+                f"{task.symbol} · 任务预算或可用资金不足，未下单")
+            return
+        price = float(signal["price"])
+        quantity = amount / price if price > 0 else 0
+        if quantity <= 0:
+            return
+        success = self._execute_order(
+            signal["symbol"], signal["side"], quantity, price,
+            float(signal.get("stop_loss", 0)),
+            float(signal.get("take_profit", 0)),
+            confirm=False, automatic=True, task_id=task.id,
+        )
+        if success:
+            self._last_auto_signals[task.id] = signal_key
+            detail = (
+                f"{signal['side']} {signal['symbol']} "
+                f"{quantity:.6f}@{price:.4f} · 使用 {amount:.2f} USDT"
+            )
+            self.automation_manager.record_execution(task.id, detail)
+            self.automation_page.add_log(detail)
+            self.log_panel.add_trade_log(
+                f"自动任务 {task.name}: {detail}", "SUCCESS")
 
     # ==================================================================
     #  模式 & 设定回调
@@ -623,11 +813,19 @@ class MainWindow(QMainWindow):
             self.pnl_bar._update_mode_btn()
             self._on_sidebar_nav("strategy")
             return
-        self._auto_trading = auto
-        self.trade_panel.setEnabled(not auto)
         if auto:
-            self.log_panel.add_system_log("自动交易已启用")
+            self._auto_trading = True
+            self.trade_panel.setEnabled(False)
+            self._on_sidebar_nav("automation")
+            self.automation_page.add_log(
+                "已进入自动模式；请选择任务并手动启动")
+            self.log_panel.add_system_log(
+                "自动模式已打开，等待客户在任务台启动任务")
         else:
+            self.automation_manager.stop_all()
+            self._auto_trading = False
+            self.trade_panel.setEnabled(True)
+            self.automation_page.refresh()
             self.log_panel.add_system_log("已切换为手动模式")
 
     def _on_strategy_saved(self):
@@ -769,6 +967,10 @@ class MainWindow(QMainWindow):
         self.pnl_bar.update_pnl(
             cs.get("daily_pnl", 0), cs.get("daily_pnl_ratio", 0),
             cs.get("total", 0), cs.get("win_rate", 0))
+        if hasattr(self, "automation_page"):
+            self.automation_page.set_capital(cs.get("total", 0))
+            allowed, reason = self.capital_pool.can_trade()
+            self.automation_page.set_risk_state(allowed, reason)
         self.capital_panel.update_status(cs)
         self.risk_panel.update_risk(rs)
         self._status_risk.setText(self.risk_manager.get_status_text())
@@ -809,6 +1011,10 @@ class MainWindow(QMainWindow):
             f"<p>本地短线交易系统 · 币安交易所</p>")
 
     def closeEvent(self, event):
+        self.automation_manager.stop_all()
+        if self.automation_worker and self.automation_worker.isRunning():
+            self.automation_worker.requestInterruption()
+            self.automation_worker.wait(5000)
         if self.data_worker:
             self.data_worker.stop()
             self.data_worker.wait()
