@@ -39,7 +39,9 @@ from gui.trade_panel import TradePanel
 from gui.position_panel import PositionPanel
 from gui.log_panel import LogPanel
 from gui.strategy_settings_dialog import (StrategySettingsPage,
-                                            load_strategy_settings)
+                                            load_strategy_settings,
+                                            SETTINGS_PATH as STRATEGY_SETTINGS_PATH,
+                                            LEGACY_SETTINGS_PATH as LEGACY_STRATEGY_SETTINGS_PATH)
 from gui.global_settings_dialog import (RiskSettingsPage, PositionSettingsPage,
                                           CapitalSettingsPage,
                                           load_global_settings)
@@ -590,8 +592,10 @@ class MainWindow(QMainWindow):
 
     def _check_strategy_configured(self) -> bool:
         try:
-            from pathlib import Path
-            return Path.home().joinpath(".bn_trader_strategies.json").exists()
+            return (
+                STRATEGY_SETTINGS_PATH.exists()
+                or LEGACY_STRATEGY_SETTINGS_PATH.exists()
+            )
         except Exception:
             return False
 

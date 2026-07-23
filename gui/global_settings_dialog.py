@@ -13,8 +13,11 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import pyqtSignal
 
 from gui.styles import Theme
+from config import Config
+from utils.settings_store import load_json_settings, save_json_settings
 
-SETTINGS_PATH = Path.home() / ".bn_trader_global.json"
+SETTINGS_PATH = Config.PREFERENCES_DIR / "global.json"
+LEGACY_SETTINGS_PATH = Path.home() / ".bn_trader_global.json"
 
 DEFAULTS = {
     "capital": {
@@ -76,23 +79,15 @@ CAPITAL_GROUPS = [
 
 
 def load_global_settings() -> dict:
-    try:
-        if SETTINGS_PATH.exists():
-            saved = json.loads(SETTINGS_PATH.read_text())
-            for k, v in DEFAULTS.items():
-                if k in saved:
-                    for pk, pv in v.items():
-                        saved[k].setdefault(pk, pv)
-                else:
-                    saved[k] = dict(v)
-            return saved
-    except Exception:
-        pass
-    return {k: dict(v) for k, v in DEFAULTS.items()}
+    return load_json_settings(
+        SETTINGS_PATH,
+        DEFAULTS,
+        legacy_paths=[LEGACY_SETTINGS_PATH],
+    )
 
 
 def save_global_settings(settings: dict):
-    SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False))
+    save_json_settings(SETTINGS_PATH, settings)
 
 
 def _make_spin(val):

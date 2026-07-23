@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -37,12 +38,41 @@ def _get_user_data_dir() -> Path:
     return Path.cwd()
 
 
+def _get_preferences_dir() -> Path:
+    """跨版本稳定的客户配置目录，不随安装目录变化。"""
+    if sys.platform == "win32":
+        base = Path(os.getenv("APPDATA", Path.home() / "AppData" / "Roaming"))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.getenv("XDG_CONFIG_HOME", Path.home() / ".config"))
+    preferences = base / "BN-Trader"
+    try:
+        preferences.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError):
+        preferences = USER_DATA_DIR
+        preferences.mkdir(parents=True, exist_ok=True)
+    return preferences
+
+
 APP_DIR = _get_app_dir()
 USER_DATA_DIR = _get_user_data_dir()
+PREFERENCES_DIR = _get_preferences_dir()
 
-# 載入 .env（優先打包目錄，其次使用者目錄）
+# 旧版可能把凭据写在应用目录；首次升级时复制到稳定用户目录。
+_user_env = PREFERENCES_DIR / ".env"
+_legacy_env = APP_DIR / ".env"
+if not _user_env.exists() and _legacy_env.is_file() and _legacy_env != _user_env:
+    try:
+        shutil.copy2(_legacy_env, _user_env)
+        _user_env.chmod(0o600)
+    except OSError:
+        pass
+
+# 載入 .env（优先稳定用户目录，兼容旧应用目录）
 _env_paths = [
-    APP_DIR / ".env",
+    _user_env,
+    _legacy_env,
     USER_DATA_DIR / ".env",
 ]
 for _p in _env_paths:
@@ -65,6 +95,7 @@ class Config:
     # 路徑
     APP_DIR = APP_DIR
     USER_DATA_DIR = USER_DATA_DIR
+    PREFERENCES_DIR = PREFERENCES_DIR
 
     # 数据库
     DATABASE_URL = os.getenv(

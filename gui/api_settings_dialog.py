@@ -18,23 +18,25 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt
 
 from gui.styles import Theme
+from config import Config
+from utils.settings_store import load_json_settings, save_json_settings
 
-SETTINGS_FILE = Path.home() / ".bn_trader_api.json"
+SETTINGS_FILE = Config.PREFERENCES_DIR / "api.json"
+LEGACY_SETTINGS_FILE = Path.home() / ".bn_trader_api.json"
 
 
 def load_api_settings() -> dict:
-    if SETTINGS_FILE.exists():
-        try:
-            return json.loads(SETTINGS_FILE.read_text())
-        except (json.JSONDecodeError, OSError):
-            pass
-    return {"api_key": "", "secret_key": "", "testnet": True}
+    return load_json_settings(
+        SETTINGS_FILE,
+        {"api_key": "", "secret_key": "", "testnet": True},
+        legacy_paths=[LEGACY_SETTINGS_FILE],
+    )
 
 
 def save_api_settings(api_key: str, secret_key: str, testnet: bool):
-    SETTINGS_FILE.write_text(json.dumps({
+    save_json_settings(SETTINGS_FILE, {
         "api_key": api_key, "secret_key": secret_key, "testnet": testnet,
-    }))
+    }, sensitive=True)
 
 
 class ApiSettingsPage(QWidget):
@@ -201,7 +203,7 @@ class ApiSettingsPage(QWidget):
         # ---- 安全提示 ----
         self._tip = QLabel(
             "⚠ 安全提示\n"
-            "· API Key 仅保存在本地 ~/.bn_trader_api.json\n"
+            "· API Key 仅保存在系统用户数据目录，产品升级不会覆盖\n"
             "· 建议仅开启「现货交易」权限，切勿开启「提现」权限\n"
             "· 请勿将 API Key 分享给任何人"
         )
@@ -381,8 +383,8 @@ class ApiSettingsPage(QWidget):
             QMessageBox.warning(self, "连接失败", str(e))
 
     def _write_env(self, ak: str, sk: str):
-        env = Path(".env")
-        lines = env.read_text().splitlines() if env.exists() else []
+        env = Config.PREFERENCES_DIR / ".env"
+        lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
         out, rk, rs = [], False, False
         for l in lines:
             if l.startswith("BINANCE_API_KEY="):
@@ -395,17 +397,24 @@ class ApiSettingsPage(QWidget):
             out.append(f"BINANCE_API_KEY={ak}")
         if not rs:
             out.append(f"BINANCE_SECRET_KEY={sk}")
-        env.write_text("\n".join(out) + "\n")
+        env.write_text("\n".join(out) + "\n", encoding="utf-8")
+        try:
+            env.chmod(0o600)
+        except OSError:
+            pass
 
     def _remove_env_keys(self):
-        env = Path(".env")
+        env = Config.PREFERENCES_DIR / ".env"
         if not env.exists():
             return
         lines = [
             line for line in env.read_text().splitlines()
             if not line.startswith(("BINANCE_API_KEY=", "BINANCE_SECRET_KEY="))
         ]
-        env.write_text("\n".join(lines) + ("\n" if lines else ""))
+        env.write_text(
+            "\n".join(lines) + ("\n" if lines else ""),
+            encoding="utf-8",
+        )
 
 
 # 保留对话框包装，兼容旧调用

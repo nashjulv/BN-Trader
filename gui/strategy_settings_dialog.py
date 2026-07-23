@@ -14,8 +14,11 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui.styles import Theme, SCENE_COLORS, SCENE_INFO
+from config import Config
+from utils.settings_store import load_json_settings, save_json_settings
 
-SETTINGS_PATH = Path.home() / ".bn_trader_strategies.json"
+SETTINGS_PATH = Config.PREFERENCES_DIR / "strategies.json"
+LEGACY_SETTINGS_PATH = Path.home() / ".bn_trader_strategies.json"
 
 DEFAULT_PARAMS = {
     "TRENDING": {
@@ -49,23 +52,15 @@ DEFAULT_PARAMS = {
 
 
 def load_strategy_settings() -> dict:
-    try:
-        if SETTINGS_PATH.exists():
-            saved = json.loads(SETTINGS_PATH.read_text())
-            for k, v in DEFAULT_PARAMS.items():
-                if k in saved:
-                    for pk, pv in v.items():
-                        saved[k].setdefault(pk, pv)
-                else:
-                    saved[k] = dict(v)
-            return saved
-    except (json.JSONDecodeError, OSError):
-        pass
-    return {k: dict(v) for k, v in DEFAULT_PARAMS.items()}
+    return load_json_settings(
+        SETTINGS_PATH,
+        DEFAULT_PARAMS,
+        legacy_paths=[LEGACY_SETTINGS_PATH],
+    )
 
 
 def save_strategy_settings(settings: dict):
-    SETTINGS_PATH.write_text(json.dumps(settings, indent=2, ensure_ascii=False))
+    save_json_settings(SETTINGS_PATH, settings)
 
 
 def _param_label(key: str) -> str:

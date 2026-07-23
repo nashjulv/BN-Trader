@@ -99,6 +99,39 @@ def help_markdown(data: dict, version: str) -> str:
     return "\n".join(lines)
 
 
+def upgrade_markdown(data: dict, version: str) -> str:
+    upgrade = data["upgrade"]
+    lines = [
+        f"# {upgrade['title']}",
+        "",
+        f"适用版本：v{version}",
+        "",
+        upgrade["summary"],
+        "",
+        f"> 当前状态：{upgrade['status']}",
+        "",
+    ]
+    for number, section in enumerate(upgrade["sections"], 1):
+        lines.extend([f"## {number}. {section['title']}", ""])
+        if section.get("body"):
+            lines.extend([section["body"], ""])
+        if section.get("items"):
+            _list(lines, section["items"])
+            lines.append("")
+        if section.get("steps"):
+            _list(lines, section["steps"], ordered=True)
+            lines.append("")
+        if section.get("note"):
+            lines.extend([f"> 注意：{section['note']}", ""])
+    lines.extend([
+        "---",
+        "",
+        "本文档由 `tools/generate_help_docs.py` 根据 `docs/help_content.json` 自动生成，请勿直接编辑。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def generate(output_dir: Path) -> list[Path]:
     data = json.loads(SOURCE.read_text(encoding="utf-8"))
     version = app_version()
@@ -106,6 +139,7 @@ def generate(output_dir: Path) -> list[Path]:
     outputs = {
         output_dir / "产品资料.md": product_markdown(data, version),
         output_dir / "系统帮助.md": help_markdown(data, version),
+        output_dir / "升级与数据迁移.md": upgrade_markdown(data, version),
     }
     for path, content in outputs.items():
         path.write_text(content, encoding="utf-8")
