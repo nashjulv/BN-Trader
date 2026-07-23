@@ -25,13 +25,14 @@ NAV_ITEMS: List[Tuple[str, str, str]] = [
     ("position",  "▣",  "持仓设置"),
     ("logs",      "☰",  "日志详情"),
     ("backtest",  "▷",  "回测"),
+    ("help",      "?",  "帮助中心"),
     ("settings",  "⚙",  "API / 设置"),
 ]
 
 NAV_LABELS = {
     "dashboard": "行情", "strategy": "策略", "capital": "资金",
     "risk": "风控", "position": "持仓", "logs": "日志",
-    "backtest": "复盘", "settings": "设置",
+    "backtest": "复盘", "help": "帮助", "settings": "设置",
 }
 
 class SideBar(QWidget):
@@ -182,6 +183,13 @@ class SideBar(QWidget):
             painter.drawLine(QPointF(3.4, 2.5), QPointF(6.3, 3.4))
             painter.drawLine(QPointF(10, 6), QPointF(10, 10))
             painter.drawLine(QPointF(10, 10), QPointF(13, 12))
+        elif key == "help":
+            painter.drawEllipse(QRectF(3, 3, 14, 14))
+            path = QPainterPath(QPointF(7.2, 7.4))
+            path.cubicTo(7.5, 5.4, 11.9, 5.2, 12.5, 7.5)
+            path.cubicTo(13, 9.4, 10.1, 9.7, 10.1, 12)
+            painter.drawPath(path)
+            painter.drawPoint(QPointF(10.1, 14.5))
         else:
             for y, knob in ((5, 7), (10, 13), (15, 9)):
                 painter.drawLine(QPointF(3, y), QPointF(17, y))

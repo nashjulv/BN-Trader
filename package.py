@@ -134,6 +134,12 @@ def pyinstaller_build(platform_tag: str, onefile: bool = False) -> Path | None:
     if not _require_pyinstaller():
         return None
 
+    print("  同步产品资料与系统帮助...")
+    docs_result = _sh([sys.executable, str(ROOT / "tools" / "generate_help_docs.py")])
+    if docs_result.returncode != 0:
+        print("  ✗ 帮助文档生成失败")
+        return None
+
     # 生成图标（如果没有）
     icon_png = ASSETS / "icon.png"
     if not icon_png.exists():

@@ -74,6 +74,7 @@ a = Analysis(
         # 图标文件（给 NSIS 等打包工具用）
         (str(ROOT / "assets" / "icon.png"), "assets"),
         (str(ROOT / "assets" / "icon.ico"), "."),
+        (str(ROOT / "docs" / "help_content.json"), "docs"),
         (str(ROOT / "README.md"), "."),
     ],
     hiddenimports=hidden_imports,

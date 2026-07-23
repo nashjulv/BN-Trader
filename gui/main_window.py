@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
                                QSplitter, QStackedWidget, QMessageBox, QStatusBar,
                                QLabel, QScrollArea, QFrame)
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QSettings
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QKeySequence
 
 import pandas as pd
 
@@ -44,6 +44,7 @@ from gui.global_settings_dialog import (RiskSettingsPage, PositionSettingsPage,
                                           CapitalSettingsPage,
                                           load_global_settings)
 from gui.review_dialog import ReviewDialog
+from gui.help_center import HelpCenterPage
 
 from services.binance_client import BinanceClient
 from services.account_sync import AccountSyncService
@@ -186,6 +187,10 @@ class MainWindow(QMainWindow):
 
         self._pages["backtest"] = self._build_placeholder("回测", "回测功能即将上线")
         self.page_stack.addWidget(self._pages["backtest"])
+
+        self.help_page = HelpCenterPage()
+        self._pages["help"] = self.help_page
+        self.page_stack.addWidget(self._pages["help"])
 
         self.api_page = ApiSettingsPage()
         self.api_page._save_btn.clicked.connect(self._on_api_page_saved)
@@ -331,6 +336,7 @@ class MainWindow(QMainWindow):
                 "strategy": "策略设置", "capital": "资金设置",
                 "risk": "风控设置", "position": "持仓设置",
                 "logs": "日志详情", "backtest": "回测",
+                "help": "帮助中心",
                 "settings": "API 设置",
             }
             self._status_msg.setText(names.get(key, key))
@@ -372,7 +378,7 @@ class MainWindow(QMainWindow):
 
         for page in [self._pages.get("strategy"), self._pages.get("risk"),
                       self._pages.get("position"), self._pages.get("capital"),
-                      self.api_page]:
+                      self.api_page, self.help_page]:
             if page and hasattr(page, '_refresh_theme'):
                 page._refresh_theme()
 
@@ -403,6 +409,12 @@ class MainWindow(QMainWindow):
         t.addAction(QAction("切换自动/手动", self,
                             triggered=lambda: self.pnl_bar.auto_btn.click()))
         h = mb.addMenu("帮助")
+        help_action = QAction("帮助中心", self)
+        help_action.setShortcut(QKeySequence("F1"))
+        help_action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        help_action.triggered.connect(lambda: self._on_sidebar_nav("help"))
+        self.addAction(help_action)
+        h.addAction(help_action)
         h.addAction(QAction("关于", self, triggered=self._show_about))
         # 设计稿使用应用内导航；保留快捷菜单能力但不占用窗口内容高度。
         mb.setVisible(False)

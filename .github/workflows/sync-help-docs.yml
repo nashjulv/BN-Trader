@@ -1,0 +1,39 @@
+name: Sync help documentation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/产品资料.md"
+      - "docs/系统帮助.md"
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Generate product and help documents
+        run: python tools/generate_help_docs.py
+
+      - name: Commit generated documents when changed
+        shell: bash
+        run: |
+          if [[ -n "$(git status --porcelain -- docs/产品资料.md docs/系统帮助.md)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/产品资料.md docs/系统帮助.md
+            git commit -m "docs: refresh generated product help"
+            git push
+          fi
