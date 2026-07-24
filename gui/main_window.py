@@ -555,9 +555,27 @@ class MainWindow(QMainWindow):
     # ==================================================================
 
     def _start_data_worker(self):
-        if self.data_worker:
+        """非阻塞启动数据线程，避免切换周期时 GUI 卡顿。"""
+        if self.data_worker and self.data_worker.isRunning():
+            # 断开旧信号，以免旧数据更新干扰
+            try:
+                self.data_worker.data_updated.disconnect()
+            except TypeError:
+                pass
             self.data_worker.stop()
-            self.data_worker.wait()
+            # 等旧线程退出后再启动新线程，不阻塞 UI
+            self.data_worker.finished.connect(self._restart_worker)
+        else:
+            self._restart_worker()
+
+    def _restart_worker(self):
+        """实际创建并启动 DataWorker（可能在旧线程 finished 回调中调用）。"""
+        # 防止多次重启
+        if self.data_worker:
+            try:
+                self.data_worker.finished.disconnect(self._restart_worker)
+            except TypeError:
+                pass
         self.data_worker = DataWorker(
             self.client, self.current_symbol, self.current_timeframe)
         self.data_worker.data_updated.connect(self._on_data_updated)
