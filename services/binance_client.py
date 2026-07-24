@@ -275,13 +275,16 @@ class BinanceClient:
             }
         return self._symbol_filters[symbol]
 
-    def _normalize_order_values(
+    def normalize_order_values(
         self,
         symbol: str,
         order_type: str,
         quantity: float = None,
         price: float = None,
     ) -> tuple[Optional[str], Optional[str]]:
+        """按指定交易对的实时过滤规则规整数量和价格。"""
+        symbol = symbol.upper()
+        order_type = order_type.upper()
         filters = self._get_symbol_filters(symbol)
         normalized_quantity = None
         normalized_price = None
@@ -296,6 +299,10 @@ class BinanceClient:
             if step <= 0:
                 lot = filters.get("LOT_SIZE", lot)
                 step = Decimal(str(lot.get("stepSize", "0")))
+            if step <= 0:
+                raise ValueError(
+                    f"{symbol} 未返回有效数量步长，已停止下单"
+                )
             try:
                 value = quantize_to_step(quantity, step)
             except (InvalidOperation, ValueError) as error:
@@ -306,7 +313,7 @@ class BinanceClient:
             maximum = Decimal(str(lot.get("maxQty", "0")))
             if value <= 0 or (minimum > 0 and value < minimum):
                 raise ValueError(
-                    f"{symbol} 数量 {quantity:g} 按步长 {step} 截断后"
+                    f"{symbol} 数量 {quantity} 按步长 {step} 截断后"
                     f"低于最小数量 {minimum}"
                 )
             if maximum > 0 and value > maximum:
@@ -315,19 +322,39 @@ class BinanceClient:
                 )
             normalized_quantity = decimal_to_api_string(value)
 
-        if price is not None and order_type == "LIMIT":
-            price_filter = filters.get("PRICE_FILTER", {})
-            tick = Decimal(str(price_filter.get("tickSize", "0")))
-            value = quantize_to_step(price, tick)
-            minimum = Decimal(str(price_filter.get("minPrice", "0")))
-            maximum = Decimal(str(price_filter.get("maxPrice", "0")))
-            if minimum > 0 and value < minimum:
-                raise ValueError(f"{symbol} 价格低于最小值 {minimum}")
-            if maximum > 0 and value > maximum:
-                raise ValueError(f"{symbol} 价格超过最大值 {maximum}")
-            normalized_price = decimal_to_api_string(value)
+        if price is not None:
+            normalized_price = self.normalize_price(symbol, price, filters)
 
         return normalized_quantity, normalized_price
+
+    def normalize_price(
+        self,
+        symbol: str,
+        price: float,
+        filters: Dict[str, Dict] = None,
+    ) -> str:
+        """按 PRICE_FILTER 规整任意订单价格或触发价。"""
+        symbol = symbol.upper()
+        filters = filters or self._get_symbol_filters(symbol)
+        price_filter = filters.get("PRICE_FILTER", {})
+        tick = Decimal(str(price_filter.get("tickSize", "0")))
+        if tick <= 0:
+            raise ValueError(
+                f"{symbol} 未返回有效价格步长，已停止下单"
+            )
+        try:
+            value = quantize_to_step(price, tick)
+        except (InvalidOperation, ValueError) as error:
+            raise ValueError(
+                f"{symbol} 价格格式无效: {price}"
+            ) from error
+        minimum = Decimal(str(price_filter.get("minPrice", "0")))
+        maximum = Decimal(str(price_filter.get("maxPrice", "0")))
+        if minimum > 0 and value < minimum:
+            raise ValueError(f"{symbol} 价格低于最小值 {minimum}")
+        if maximum > 0 and value > maximum:
+            raise ValueError(f"{symbol} 价格超过最大值 {maximum}")
+        return decimal_to_api_string(value)
 
     def create_order(self, symbol: str, side: str, order_type: str,
                      quantity: float = None, price: float = None,
@@ -345,8 +372,15 @@ class BinanceClient:
             stop_price: 触发价格（止损单需要）
             time_in_force: 有效时间 GTC/IOC/FOK
         """
-        normalized_quantity, normalized_price = self._normalize_order_values(
+        symbol = symbol.upper()
+        side = side.upper()
+        order_type = order_type.upper()
+        normalized_quantity, normalized_price = self.normalize_order_values(
             symbol, order_type, quantity, price
+        )
+        normalized_stop_price = (
+            self.normalize_price(symbol, stop_price)
+            if stop_price is not None else None
         )
         if (
             normalized_quantity is not None
@@ -378,9 +412,13 @@ class BinanceClient:
             params["quantity"] = normalized_quantity
         if normalized_price is not None:
             params["price"] = normalized_price
-        if stop_price:
-            params["stopPrice"] = stop_price
-        if order_type == "LIMIT":
+        if normalized_stop_price is not None:
+            params["stopPrice"] = normalized_stop_price
+        if order_type in {
+            "LIMIT",
+            "STOP_LOSS_LIMIT",
+            "TAKE_PROFIT_LIMIT",
+        }:
             params["timeInForce"] = time_in_force
 
         return self._request("POST", "/api/v3/order", params, signed=True)

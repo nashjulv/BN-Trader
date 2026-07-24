@@ -64,15 +64,37 @@ class AccountSyncService(QObject):
             self.error_occurred.emit("未配置 API Key，无法下单")
             return None
 
+        submitted_quantity = quantity
+        submitted_price = price
         try:
+            normalized_quantity, normalized_price = (
+                self.client.normalize_order_values(
+                    symbol,
+                    order_type,
+                    quantity,
+                    price if order_type != "MARKET" else None,
+                )
+            )
+            submitted_quantity = float(normalized_quantity)
+            if normalized_price is not None:
+                submitted_price = float(normalized_price)
             if order_type == "MARKET":
                 result = self.client.create_order(
-                    symbol, side, "MARKET", quantity=quantity)
+                    symbol, side, "MARKET", quantity=submitted_quantity)
             else:
                 result = self.client.create_order(
-                    symbol, side, "LIMIT", quantity=quantity, price=price)
+                    symbol, side, "LIMIT",
+                    quantity=submitted_quantity,
+                    price=submitted_price)
 
-            logger.info(f"真实订单: {side} {symbol} x{quantity} @ {price} → {result.get('status')}")
+            logger.info(
+                "真实订单: %s %s x%s @ %s → %s",
+                side,
+                symbol,
+                submitted_quantity,
+                submitted_price,
+                result.get("status"),
+            )
             actual_quantity = float(
                 result.get("origQty")
                 or result.get("executedQty")
@@ -96,8 +118,11 @@ class AccountSyncService(QObject):
             }
 
         except Exception as e:
+            quantity_detail = f"{quantity:g}"
+            if submitted_quantity != quantity:
+                quantity_detail += f" → 已规整 {submitted_quantity:g}"
             msg = (
-                f"下单失败 {side} {symbol} 数量 {quantity:g}: {e}"
+                f"下单失败 {side} {symbol} 数量 {quantity_detail}: {e}"
             )
             logger.error(msg)
             self.error_occurred.emit(msg)

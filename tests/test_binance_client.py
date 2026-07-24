@@ -210,3 +210,73 @@ def test_sol_limit_order_normalizes_quantity_and_price(monkeypatch):
 
     assert captured["data"]["quantity"] == "0.265"
     assert captured["data"]["price"] == "123.45"
+
+
+def test_all_supported_symbols_use_their_own_quantity_step(monkeypatch):
+    cases = {
+        "BTCUSDT": ("0.00001000", 0.000764378, "0.00076"),
+        "ETHUSDT": ("0.00010000", 0.01234567, "0.0123"),
+        "BNBUSDT": ("0.00100000", 0.123456, "0.123"),
+        "SOLUSDT": ("0.00100000", 0.265217, "0.265"),
+        "XRPUSDT": ("0.10000000", 12.3456, "12.3"),
+        "USDCUSDT": ("0.10000000", 12.3456, "12.3"),
+    }
+
+    for symbol, (step, quantity, expected) in cases.items():
+        client = BinanceClient()
+        client._symbol_filters[symbol] = {
+            "LOT_SIZE": {
+                "minQty": step,
+                "maxQty": "90000000",
+                "stepSize": step,
+            },
+            "MARKET_LOT_SIZE": {
+                "minQty": "0",
+                "maxQty": "90000000",
+                "stepSize": "0",
+            },
+            "PRICE_FILTER": {
+                "minPrice": "0.00000001",
+                "maxPrice": "1000000",
+                "tickSize": "0.00000001",
+            },
+        }
+        captured = {}
+
+        def fake_post(url, data, timeout):
+            captured["quantity"] = data["quantity"]
+            return FakeResponse(200, {"orderId": 1})
+
+        monkeypatch.setattr(client.session, "post", fake_post)
+        client.create_order(
+            symbol, "SELL", "MARKET", quantity=quantity
+        )
+        assert captured["quantity"] == expected
+
+
+def test_stop_price_is_normalized_for_conditional_orders(monkeypatch):
+    client = BinanceClient()
+    cache_sol_filters(client)
+    captured = {}
+
+    def fake_post(url, data, timeout):
+        captured["data"] = dict(data)
+        return FakeResponse(200, {"orderId": 1})
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+    client.create_order(
+        "solusdt",
+        "sell",
+        "stop_loss_limit",
+        quantity=0.265217,
+        price=123.456,
+        stop_price=122.987,
+    )
+
+    assert captured["data"]["symbol"] == "SOLUSDT"
+    assert captured["data"]["side"] == "SELL"
+    assert captured["data"]["type"] == "STOP_LOSS_LIMIT"
+    assert captured["data"]["quantity"] == "0.265"
+    assert captured["data"]["price"] == "123.45"
+    assert captured["data"]["stopPrice"] == "122.98"
+    assert captured["data"]["timeInForce"] == "GTC"
