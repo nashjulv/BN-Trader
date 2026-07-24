@@ -137,7 +137,6 @@ class AutomationManager:
             self.tasks = default_tasks()
         if not self.allocations:
             self.allocations = default_allocations()
-        self._busy_task_id: Optional[str] = None
         self.validate_allocations()
 
     def save(self):
@@ -211,21 +210,29 @@ class AutomationManager:
             self.stop(task.id)
 
     def due_task(self, now_ts: Optional[float] = None) -> Optional[AutomationTask]:
-        if self._busy_task_id:
-            return None
+        tasks = self.due_tasks(1, now_ts=now_ts)
+        return tasks[0] if tasks else None
+
+    def due_tasks(
+        self,
+        limit: int,
+        now_ts: Optional[float] = None,
+    ) -> list[AutomationTask]:
+        """返回多个彼此独立的到期任务，供有限并行调度。"""
+        if limit <= 0:
+            return []
         now_ts = now_ts or datetime.now().timestamp()
-        return next((
+        return [
             task for task in self.tasks
             if task.status == RUNNING
             and task.executions_today < task.max_trades_per_day
             and task.next_run_ts <= now_ts
-        ), None)
+        ][:limit]
 
     def mark_evaluating(self, task_id: str):
         task = self.get(task_id)
         if not task:
             return
-        self._busy_task_id = task_id
         task.status = EVALUATING
         task.last_message = "正在获取行情并评估策略"
 
@@ -244,13 +251,11 @@ class AutomationManager:
         if task.status == STOPPED:
             task.last_run = datetime.fromtimestamp(now_ts).strftime("%H:%M:%S")
             task.last_message = "本轮评估结果已忽略；任务已手动停止"
-            self._busy_task_id = None
             return
         task.status = RUNNING if success else ERROR
         task.last_run = datetime.fromtimestamp(now_ts).strftime("%H:%M:%S")
         task.next_run_ts = now_ts + task.interval_seconds if success else 0.0
         task.last_message = message
-        self._busy_task_id = None
 
     def record_execution(self, task_id: str, message: str):
         task = self.get(task_id)

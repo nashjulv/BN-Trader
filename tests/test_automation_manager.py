@@ -40,6 +40,22 @@ def test_due_task_lifecycle(tmp_path):
     assert task.next_run_ts == 110 + task.interval_seconds
 
 
+def test_due_tasks_support_bounded_parallel_evaluation(tmp_path):
+    manager = AutomationManager(tmp_path / "automation.json")
+    for task in manager.tasks:
+        manager.start(task.id, now_ts=100)
+
+    due = manager.due_tasks(2, now_ts=100)
+
+    assert len(due) == 2
+    assert due[0].id != due[1].id
+    for task in due:
+        manager.mark_evaluating(task.id)
+    remaining = manager.due_tasks(2, now_ts=100)
+    assert len(remaining) == 1
+    assert remaining[0].id not in {task.id for task in due}
+
+
 def test_stopping_during_evaluation_never_restarts_task(tmp_path):
     manager = AutomationManager(tmp_path / "automation.json")
     task = manager.tasks[0]

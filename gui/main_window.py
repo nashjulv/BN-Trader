@@ -18,6 +18,7 @@
 
 import logging
 import time
+from collections import deque
 from typing import Dict, Optional
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -68,6 +69,8 @@ from indicators.technical import calculate_all_indicators
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+MAX_PARALLEL_AUTOMATION_EVALUATIONS = 3
 
 
 def normalize_open_order(order: Dict) -> Dict:
@@ -214,7 +217,12 @@ class MainWindow(QMainWindow):
         self.risk_manager = RiskManager()
         self.strategy_engine = StrategyEngine()
         self.automation_manager = AutomationManager()
-        self.automation_worker: Optional[AutomationEvaluationWorker] = None
+        self.automation_workers: Dict[str, AutomationEvaluationWorker] = {}
+        self._automation_order_queue = deque()
+        self._queued_auto_signal_keys = set()
+        self._automation_order_busy = False
+        self._automation_order_item = None
+        self._automation_order_worker: Optional[AccountSyncWorker] = None
 
         self.data_worker: Optional[DataWorker] = None
         self.current_symbol = "BTCUSDT"
@@ -259,6 +267,12 @@ class MainWindow(QMainWindow):
         self.automation_timer = QTimer()
         self.automation_timer.timeout.connect(self._automation_tick)
         self.automation_timer.start(1000)
+
+        self.automation_order_timer = QTimer()
+        self.automation_order_timer.timeout.connect(
+            self._process_automation_order_queue
+        )
+        self.automation_order_timer.start(250)
 
         self.open_orders_timer = QTimer()
         self.open_orders_timer.timeout.connect(self._sync_open_orders)
@@ -900,24 +914,34 @@ class MainWindow(QMainWindow):
     def _automation_tick(self):
         if not self._auto_trading:
             return
-        task = self.automation_manager.due_task()
-        if not task:
+        capacity = (
+            MAX_PARALLEL_AUTOMATION_EVALUATIONS
+            - len(self.automation_workers)
+        )
+        if capacity <= 0:
             return
-        self.automation_manager.mark_evaluating(task.id)
+        tasks = self.automation_manager.due_tasks(capacity)
+        if not tasks:
+            return
+        strategy_settings = load_strategy_settings()
+        for task in tasks:
+            self.automation_manager.mark_evaluating(task.id)
+            self.automation_page.add_log(
+                f"{task.symbol} · 开始并行评估 {task.strategy} 策略")
+            worker = AutomationEvaluationWorker(
+                task, strategy_settings
+            )
+            self.automation_workers[task.id] = worker
+            worker.evaluated.connect(self._on_automation_evaluated)
+            worker.finished.connect(
+                lambda task_id=task.id:
+                self._on_automation_worker_finished(task_id)
+            )
+            worker.start()
         self.automation_page.refresh()
-        self.automation_page.add_log(
-            f"{task.symbol} · 开始评估 {task.strategy} 策略")
-        self.automation_worker = AutomationEvaluationWorker(
-            task, load_strategy_settings())
-        self.automation_worker.evaluated.connect(
-            self._on_automation_evaluated)
-        self.automation_worker.finished.connect(
-            self._on_automation_worker_finished)
-        self.automation_worker.start()
 
-    def _on_automation_worker_finished(self):
-        worker = self.automation_worker
-        self.automation_worker = None
+    def _on_automation_worker_finished(self, task_id: str):
+        worker = self.automation_workers.pop(task_id, None)
         if worker:
             worker.deleteLater()
 
@@ -945,7 +969,9 @@ class MainWindow(QMainWindow):
                 signal["side"], round(signal["price"], 6), signal["reason"]
             )
             if self._last_auto_signals.get(task_id) != signal_key:
-                self._execute_automation_signal(task, result, signal, signal_key)
+                self._enqueue_automation_signal(
+                    task, result, signal, signal_key
+                )
         elif retryable:
             self.log_panel.add_system_log(
                 f"自动任务网络波动 {task.name}: {message}", "WARNING")
@@ -955,6 +981,98 @@ class MainWindow(QMainWindow):
         self._sync_automation_master_state()
         self.automation_page.refresh()
 
+    def _enqueue_automation_signal(
+        self, task, result: dict, signal: dict, signal_key
+    ):
+        queue_key = (task.id, signal_key)
+        if queue_key in self._queued_auto_signal_keys:
+            return
+        self._queued_auto_signal_keys.add(queue_key)
+        self._automation_order_queue.append({
+            "task_id": task.id,
+            "result": dict(result),
+            "signal": dict(signal),
+            "signal_key": signal_key,
+            "queue_key": queue_key,
+        })
+        self.automation_page.add_log(
+            f"{task.symbol} · 信号已进入下单队列 "
+            f"（前方 {len(self._automation_order_queue) - 1} 笔）"
+        )
+
+    def _process_automation_order_queue(self):
+        if self._automation_order_busy or not self._automation_order_queue:
+            return
+        item = self._automation_order_queue.popleft()
+        self._automation_order_item = item
+        self._automation_order_busy = True
+        task = self.automation_manager.get(item["task_id"])
+        if not task or task.status == "STOPPED":
+            self._finish_automation_order_item()
+            return
+        if not self.client.has_keys():
+            self._execute_automation_signal(
+                task,
+                item["result"],
+                item["signal"],
+                item["signal_key"],
+            )
+            self._finish_automation_order_item()
+            return
+
+        worker = AccountSyncWorker(self.client)
+        self._automation_order_worker = worker
+        worker.snapshot_updated.connect(
+            self._on_automation_order_snapshot
+        )
+        worker.failed.connect(self._on_automation_order_preflight_failed)
+        worker.finished.connect(self._on_automation_order_preflight_finished)
+        worker.start()
+
+    def _on_automation_order_snapshot(self, snapshot: Dict):
+        item = self._automation_order_item
+        if not item:
+            return
+        self.account_sync.apply_snapshot(snapshot)
+        task = self.automation_manager.get(item["task_id"])
+        if not task or task.status == "STOPPED":
+            return
+        self.automation_page.add_log(
+            f"{task.symbol} · 已按最新账户快照完成队列前置校验"
+        )
+        self._execute_automation_signal(
+            task,
+            item["result"],
+            item["signal"],
+            item["signal_key"],
+        )
+
+    def _on_automation_order_preflight_failed(self, message: str):
+        item = self._automation_order_item
+        task = (
+            self.automation_manager.get(item["task_id"])
+            if item else None
+        )
+        name = task.name if task else "未知任务"
+        self.log_panel.add_system_log(
+            f"自动下单队列前置校验失败 {name}: {message}",
+            "WARNING",
+        )
+
+    def _on_automation_order_preflight_finished(self):
+        worker = self._automation_order_worker
+        self._automation_order_worker = None
+        if worker:
+            worker.deleteLater()
+        self._finish_automation_order_item()
+
+    def _finish_automation_order_item(self):
+        item = self._automation_order_item
+        if item:
+            self._queued_auto_signal_keys.discard(item["queue_key"])
+        self._automation_order_item = None
+        self._automation_order_busy = False
+
     def _execute_automation_signal(
         self, task, result: dict, signal: dict, signal_key
     ):
@@ -963,7 +1081,16 @@ class MainWindow(QMainWindow):
             self.automation_page.add_log(
                 f"{task.symbol} · 资金分配已停用，未下单")
             return
-        task_budget = self.capital_pool.total * allocation.allocation_ratio
+        real_snapshot = (
+            self._real_account_snapshot
+            if self.client.has_keys() else {}
+        )
+        capital_base = float(
+            real_snapshot.get("total_value_usdt", 0) or 0
+        )
+        if capital_base <= 0:
+            capital_base = self.capital_pool.total
+        task_budget = capital_base * allocation.allocation_ratio
         used = sum(
             position.get("capital_used", 0)
             for position in self.positions
@@ -976,12 +1103,28 @@ class MainWindow(QMainWindow):
             result.get("scene", "RANGING"),
             float(result.get("confidence", 0.5)),
         )
-        effective_available = max(
-            0.0,
-            self.capital_pool.available
-            - self.capital_pool.locked
-            - self.capital_pool.margin,
-        )
+        if real_snapshot:
+            symbol = signal["symbol"].upper()
+            quote_asset = "USDT" if symbol.endswith("USDT") else ""
+            base_asset = (
+                symbol[:-len(quote_asset)] if quote_asset else symbol
+            )
+            if signal["side"] == "BUY":
+                effective_available = float(
+                    real_snapshot.get("available_usdt", 0) or 0
+                )
+            else:
+                base_free = self.exchange_balances.get(
+                    base_asset, {}
+                ).get("free", 0)
+                effective_available = base_free * float(signal["price"])
+        else:
+            effective_available = max(
+                0.0,
+                self.capital_pool.available
+                - self.capital_pool.locked
+                - self.capital_pool.margin,
+            )
         amount = min(
             remaining_budget, task_order_limit,
             scene_limit, effective_available,
@@ -1519,9 +1662,15 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         self.automation_manager.stop_all()
-        if self.automation_worker and self.automation_worker.isRunning():
-            self.automation_worker.requestInterruption()
-            self.automation_worker.wait(5000)
+        for worker in list(self.automation_workers.values()):
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.wait(5000)
+        if (
+            self._automation_order_worker
+            and self._automation_order_worker.isRunning()
+        ):
+            self._automation_order_worker.wait(20000)
         if self.open_orders_worker and self.open_orders_worker.isRunning():
             self.open_orders_worker.wait(15000)
         if (
