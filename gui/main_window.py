@@ -52,7 +52,7 @@ from gui.help_center import HelpCenterPage
 from gui.automation_page import AutomationPage
 
 from services.binance_client import BinanceClient
-from services.account_sync import AccountSyncService
+from services.account_sync import AccountSyncService, fetch_account_snapshot
 from services.scene_detector import SceneDetector, Scene
 from services.capital_pool import CapitalPool
 from services.risk_manager import RiskManager, RiskCheck
@@ -150,6 +150,23 @@ class OpenOrdersWorker(QThread):
             self.failed.emit(str(error))
 
 
+class AccountSyncWorker(QThread):
+    snapshot_updated = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, client: BinanceClient):
+        super().__init__()
+        self.client = client
+
+    def run(self):
+        try:
+            self.snapshot_updated.emit(
+                fetch_account_snapshot(self.client)
+            )
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
 class ApiConnectionWorker(QThread):
     completed = pyqtSignal(dict)
     failed = pyqtSignal(str)
@@ -206,9 +223,11 @@ class MainWindow(QMainWindow):
         self.current_scene: Optional[Scene] = None
         self.positions = []
         self.exchange_balances = {}
+        self._real_account_snapshot = {}
         self.open_orders = []
         self._known_open_order_ids = set()
         self.open_orders_worker: Optional[OpenOrdersWorker] = None
+        self.account_sync_worker: Optional[AccountSyncWorker] = None
         self.api_connection_worker: Optional[ApiConnectionWorker] = None
         self._last_auto_signals = {}
         self._auto_trading = False
@@ -221,6 +240,9 @@ class MainWindow(QMainWindow):
 
         self.account_sync.balances_updated.connect(self._on_balances_updated)
         self.account_sync.total_value_updated.connect(self._on_total_value_updated)
+        self.account_sync.snapshot_updated.connect(
+            self._on_account_snapshot_updated
+        )
         self.account_sync.error_occurred.connect(
             lambda msg: self.log_panel.add_system_log(msg, "ERROR"))
         self.capital_panel._sync_btn.clicked.connect(self._sync_account)
@@ -241,6 +263,10 @@ class MainWindow(QMainWindow):
         self.open_orders_timer = QTimer()
         self.open_orders_timer.timeout.connect(self._sync_open_orders)
         self.open_orders_timer.start(30000)
+
+        self.account_sync_timer = QTimer()
+        self.account_sync_timer.timeout.connect(self._sync_account)
+        self.account_sync_timer.start(15000)
 
         logger.info("主窗口初始化完成")
 
@@ -350,7 +376,9 @@ class MainWindow(QMainWindow):
 
         # 三栏主体
         self.body_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.body_splitter.setHandleWidth(1)
+        self.body_splitter.setObjectName("dashboardBodySplitter")
+        self.body_splitter.setHandleWidth(7)
+        self.body_splitter.setOpaqueResize(True)
         self.body_splitter.setChildrenCollapsible(False)
 
         # --- 左栏：堆叠卡片 ---
@@ -360,8 +388,8 @@ class MainWindow(QMainWindow):
         left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        left_scroll.setMinimumWidth(220)
-        left_scroll.setMaximumWidth(300)
+        left_scroll.setMinimumWidth(200)
+        left_scroll.setMaximumWidth(420)
 
         left_inner = QWidget()
         self.left_inner = left_inner
@@ -384,9 +412,11 @@ class MainWindow(QMainWindow):
         self.body_splitter.addWidget(left_scroll)
 
         # --- 中栏：K线 + 日志 ---
-        center_splitter = QSplitter(Qt.Orientation.Vertical)
-        center_splitter.setHandleWidth(1)
-        center_splitter.setChildrenCollapsible(False)
+        self.center_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.center_splitter.setObjectName("dashboardCenterSplitter")
+        self.center_splitter.setHandleWidth(7)
+        self.center_splitter.setOpaqueResize(True)
+        self.center_splitter.setChildrenCollapsible(False)
 
         chart_wrap = QFrame()
         chart_wrap.setObjectName("cardFrame")
@@ -395,14 +425,14 @@ class MainWindow(QMainWindow):
         self.chart_widget = ChartWidget()
         self.chart_widget.request_data.connect(self._on_chart_data_request)
         cw.addWidget(self.chart_widget)
-        center_splitter.addWidget(chart_wrap)
+        self.center_splitter.addWidget(chart_wrap)
 
         self.log_panel = LogPanel(detail_mode=False)
-        center_splitter.addWidget(self.log_panel)
+        self.center_splitter.addWidget(self.log_panel)
 
-        center_splitter.setStretchFactor(0, 65)
-        center_splitter.setStretchFactor(1, 35)
-        self.body_splitter.addWidget(center_splitter)
+        self.center_splitter.setStretchFactor(0, 65)
+        self.center_splitter.setStretchFactor(1, 35)
+        self.body_splitter.addWidget(self.center_splitter)
 
         # --- 右栏：下单 ---
         right_wrap = QWidget()
@@ -417,16 +447,59 @@ class MainWindow(QMainWindow):
         )
         rv.addWidget(self.open_orders_panel)
         right_wrap.setMinimumWidth(230)
-        right_wrap.setMaximumWidth(300)
+        right_wrap.setMaximumWidth(420)
         self.body_splitter.addWidget(right_wrap)
 
         self.body_splitter.setStretchFactor(0, 22)
         self.body_splitter.setStretchFactor(1, 50)
         self.body_splitter.setStretchFactor(2, 28)
         self.body_splitter.setSizes([240, 760, 260])
+        self.center_splitter.setSizes([520, 260])
+        self._configure_splitter_handles()
+        self._restore_splitter_sizes()
 
         layout.addWidget(self.body_splitter, 1)
         return page
+
+    def _configure_splitter_handles(self):
+        for index in range(1, self.body_splitter.count()):
+            handle = self.body_splitter.handle(index)
+            handle.setCursor(Qt.CursorShape.SplitHCursor)
+            handle.setToolTip("左右拖动调整 K 线与侧栏宽度")
+            handle.setAccessibleName("调整 K 线与侧栏宽度")
+        for index in range(1, self.center_splitter.count()):
+            handle = self.center_splitter.handle(index)
+            handle.setCursor(Qt.CursorShape.SplitVCursor)
+            handle.setToolTip("上下拖动调整 K 线与日志高度")
+            handle.setAccessibleName("调整 K 线与日志高度")
+        self.body_splitter.splitterMoved.connect(
+            lambda *_: self._save_splitter_sizes()
+        )
+        self.center_splitter.splitterMoved.connect(
+            lambda *_: self._save_splitter_sizes()
+        )
+
+    def _restore_splitter_sizes(self):
+        settings = QSettings("BN-Trader", "BN-Trader")
+        body_sizes = settings.value("dashboard/body_splitter_sizes")
+        center_sizes = settings.value("dashboard/center_splitter_sizes")
+        if isinstance(body_sizes, list) and len(body_sizes) == 3:
+            self.body_splitter.setSizes([int(value) for value in body_sizes])
+        if isinstance(center_sizes, list) and len(center_sizes) == 2:
+            self.center_splitter.setSizes(
+                [int(value) for value in center_sizes]
+            )
+
+    def _save_splitter_sizes(self):
+        settings = QSettings("BN-Trader", "BN-Trader")
+        settings.setValue(
+            "dashboard/body_splitter_sizes",
+            self.body_splitter.sizes(),
+        )
+        settings.setValue(
+            "dashboard/center_splitter_sizes",
+            self.center_splitter.sizes(),
+        )
 
     def _build_placeholder(self, title: str, msg: str) -> QWidget:
         w = QWidget()
@@ -479,10 +552,15 @@ class MainWindow(QMainWindow):
             app.setStyleSheet(Theme.stylesheet())
         self.setStyleSheet("")
         t = Theme.colors()
-        self.body_splitter.setStyleSheet(
-            f"QSplitter {{ background:transparent; }} "
-            f"QSplitter::handle {{ background:{t['divider']}; }} "
-            f"QSplitter::handle:hover {{ background:{t['hover_border']}; }}")
+        splitter_style = (
+            "QSplitter { background:transparent; } "
+            f"QSplitter::handle {{ background:{t['divider']}; "
+            "border-radius:2px; margin:2px; } "
+            f"QSplitter::handle:hover {{ background:{t['hover_border']}; "
+            "margin:1px; }"
+        )
+        self.body_splitter.setStyleSheet(splitter_style)
+        self.center_splitter.setStyleSheet(splitter_style)
         self.pnl_bar._restyle()
         self.chart_widget._apply_theme()
         self.sidebar._apply_theme()
@@ -652,8 +730,13 @@ class MainWindow(QMainWindow):
     def _execute_order(self, symbol, side, qty, price, sl=0, tp=0,
                        confirm: bool = False, automatic: bool = False,
                        task_id: str = ""):
+        risk_capital = float(
+            self._real_account_snapshot.get("total_value_usdt", 0) or 0
+        )
+        if not self.client.has_keys() or risk_capital <= 0:
+            risk_capital = self.capital_pool.total
         check = self.risk_manager.check_trade_permission(
-            self.capital_pool.total, qty * price, price, sl)
+            risk_capital, qty * price, price, sl)
         if not check.allowed:
             if automatic:
                 self.log_panel.add_risk_log(
@@ -675,6 +758,7 @@ class MainWindow(QMainWindow):
             ("LIMIT" if self.trade_panel.type_group.checkedId() == 0 else "MARKET")
         )
         order_status = "FILLED"
+        real_order = self.client.has_keys()
         if confirm:
             reply = QMessageBox.question(
                 self, "确认交易",
@@ -683,7 +767,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply != QMessageBox.StandardButton.Yes:
                 return False
-        if self.client.has_keys():
+        if real_order:
             result = self.account_sync.execute_real_order(
                 symbol, side, qty, price, order_type)
             if result and result.get("status") in ("FILLED", "NEW"):
@@ -705,6 +789,7 @@ class MainWindow(QMainWindow):
                         "status": "NEW",
                         "type": order_type,
                     })
+                self.risk_manager.record_order_execution()
                 self._sync_account()
             else:
                 self.log_panel.add_system_log("下单失败", "CRITICAL")
@@ -716,6 +801,8 @@ class MainWindow(QMainWindow):
         if not self.capital_pool.lock_capital(cap):
             QMessageBox.warning(self, "资金不足", "可用资金不足，无法提交订单。")
             return False
+        if not real_order:
+            self.risk_manager.record_order_execution()
         if order_status == "NEW":
             self._update_all_panels()
             return True
@@ -840,9 +927,10 @@ class MainWindow(QMainWindow):
             return
         was_stopped = task.status == "STOPPED"
         ok = bool(result.get("ok"))
+        retryable = bool(result.get("retryable"))
         message = result.get("message", "评估完成")
         self.automation_manager.finish_evaluation(
-            task_id, message, success=ok)
+            task_id, message, success=ok or retryable)
         if was_stopped:
             self.automation_page.add_log(
                 f"{task.symbol} · 任务已停止，本轮结果已忽略")
@@ -858,6 +946,9 @@ class MainWindow(QMainWindow):
             )
             if self._last_auto_signals.get(task_id) != signal_key:
                 self._execute_automation_signal(task, result, signal, signal_key)
+        elif retryable:
+            self.log_panel.add_system_log(
+                f"自动任务网络波动 {task.name}: {message}", "WARNING")
         elif not ok:
             self.log_panel.add_system_log(
                 f"自动任务异常 {task.name}: {message}", "ERROR")
@@ -1033,8 +1124,11 @@ class MainWindow(QMainWindow):
         self.pnl_bar.set_api_status(False)
         self.account_sync.balances = []
         self.account_sync.total_value_usdt = 0
+        self.account_sync.last_snapshot = {}
+        self._real_account_snapshot = {}
         self.exchange_balances = {}
         self.capital_panel.update_balances([], 0)
+        self.capital_panel.clear_exchange_snapshot()
         self.trade_panel.set_available(0)
         self.open_orders = []
         self._known_open_order_ids.clear()
@@ -1118,7 +1212,31 @@ class MainWindow(QMainWindow):
         self._on_sidebar_nav("strategy")
 
     def _sync_account(self):
-        self.account_sync.sync()
+        """在后台读取完整账户快照，避免网络请求阻塞界面。"""
+        if not self.client.has_keys():
+            return
+        if (
+            self.account_sync_worker
+            and self.account_sync_worker.isRunning()
+        ):
+            return
+        worker = AccountSyncWorker(self.client)
+        self.account_sync_worker = worker
+        worker.snapshot_updated.connect(self.account_sync.apply_snapshot)
+        worker.failed.connect(self._on_account_sync_failed)
+        worker.finished.connect(self._on_account_sync_finished)
+        worker.start()
+
+    def _on_account_sync_failed(self, message: str):
+        self.log_panel.add_system_log(
+            f"账户同步失败: {message}", "ERROR"
+        )
+
+    def _on_account_sync_finished(self):
+        worker = self.account_sync_worker
+        self.account_sync_worker = None
+        if worker:
+            worker.deleteLater()
 
     def _sync_open_orders(self):
         """后台同步币安当前挂单，避免阻塞主界面。"""
@@ -1209,8 +1327,24 @@ class MainWindow(QMainWindow):
             for balance in balances
         }
         self.capital_panel.update_balances(
-            balances, self.account_sync.total_value_usdt)
+            balances, self.account_sync.total_value_usdt
+        )
         self._update_trade_balances()
+
+    def _on_account_snapshot_updated(self, snapshot: Dict):
+        self._real_account_snapshot = dict(snapshot)
+        self.capital_panel.update_exchange_snapshot(
+            snapshot,
+            self.capital_pool.reserve_ratio,
+        )
+        missing = snapshot.get("unpriced_assets", [])
+        if missing:
+            self.log_panel.add_system_log(
+                "账户估值未包含无法换算为 USDT 的资产: "
+                + ", ".join(missing),
+                "WARNING",
+            )
+        self._update_all_panels()
 
     def _update_trade_balances(self):
         if not self.client.has_keys() or not self.exchange_balances:
@@ -1231,10 +1365,17 @@ class MainWindow(QMainWindow):
         )
 
     def _on_total_value_updated(self, total_usdt: float):
+        display_total = (
+            total_usdt if self.client.has_keys()
+            else self.capital_pool.total
+        )
         self.pnl_bar.update_pnl(
             self.capital_pool.daily_pnl, self.capital_pool.daily_pnl_ratio,
-            self.capital_pool.total,
-            self.capital_pool.win_count / max(self.capital_pool.total_trades, 1))
+            display_total,
+            (
+                self.capital_pool.win_count / self.capital_pool.total_trades
+                if self.capital_pool.total_trades else None
+            ))
         if self.client.has_keys() and self.exchange_balances:
             self._update_trade_balances()
         else:
@@ -1305,6 +1446,14 @@ class MainWindow(QMainWindow):
     def _update_all_panels(self):
         t = Theme.colors()
         cs = self.capital_pool.get_status()
+        real_snapshot = (
+            self._real_account_snapshot
+            if self.client.has_keys() else {}
+        )
+        real_total = float(
+            real_snapshot.get("total_value_usdt", 0) or 0
+        )
+        display_total = real_total if real_total > 0 else cs.get("total", 0)
         self.risk_manager.state.reserve_ratio = (
             self.capital_pool.reserve / self.capital_pool.total
             if self.capital_pool.total > 0 else 0
@@ -1314,12 +1463,19 @@ class MainWindow(QMainWindow):
         rs = self.risk_manager.get_risk_summary()
         self.pnl_bar.update_pnl(
             cs.get("daily_pnl", 0), cs.get("daily_pnl_ratio", 0),
-            cs.get("total", 0), cs.get("win_rate", 0))
+            display_total,
+            cs.get("win_rate") if cs.get("total_trades", 0) else None)
         if hasattr(self, "automation_page"):
-            self.automation_page.set_capital(cs.get("total", 0))
+            self.automation_page.set_capital(display_total)
             allowed, reason = self.capital_pool.can_trade()
             self.automation_page.set_risk_state(allowed, reason)
-        self.capital_panel.update_status(cs)
+        if real_snapshot:
+            self.capital_panel.update_exchange_snapshot(
+                real_snapshot,
+                self.capital_pool.reserve_ratio,
+            )
+        else:
+            self.capital_panel.update_status(cs)
         self.risk_panel.update_risk(rs)
         self._status_risk.setText(self.risk_manager.get_status_text())
         ok = self.risk_manager.is_trading_allowed
@@ -1368,6 +1524,11 @@ class MainWindow(QMainWindow):
             self.automation_worker.wait(5000)
         if self.open_orders_worker and self.open_orders_worker.isRunning():
             self.open_orders_worker.wait(15000)
+        if (
+            self.account_sync_worker
+            and self.account_sync_worker.isRunning()
+        ):
+            self.account_sync_worker.wait(20000)
         if (
             self.api_connection_worker
             and self.api_connection_worker.isRunning()

@@ -3,6 +3,7 @@
 """
 
 from typing import Dict, List
+from datetime import datetime
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QFrame, QPushButton, QGridLayout)
@@ -17,6 +18,7 @@ class CapitalPanel(QWidget):
     def __init__(self, compact: bool = True):
         super().__init__()
         self.compact = compact
+        self._exchange_mode = False
         self._init_ui()
         self._refresh_theme()
 
@@ -35,6 +37,9 @@ class CapitalPanel(QWidget):
         self._title = QLabel("资金概览")
         self._title.setObjectName("sectionTitle")
         hdr.addWidget(self._title)
+        self.source_label = QLabel("本地")
+        self.source_label.setObjectName("dimLabel")
+        hdr.addWidget(self.source_label)
         hdr.addStretch()
         self._sync_btn = QPushButton("同步")
         self._sync_btn.setObjectName("textBtn")
@@ -62,7 +67,7 @@ class CapitalPanel(QWidget):
             ("持仓保证金", self.margin_label, 1, 0),
             ("风险准备金", self.reserve_label, 1, 1),
         ]
-        self._cap_labels = []
+        self._cap_labels = {}
         for name, val_lbl, r, c in items:
             cell = QVBoxLayout()
             cell.setSpacing(2)
@@ -72,7 +77,7 @@ class CapitalPanel(QWidget):
             cell.addWidget(cap)
             cell.addWidget(val_lbl)
             grid.addLayout(cell, r, c)
-            self._cap_labels.append(cap)
+            self._cap_labels[name] = cap
         layout.addLayout(grid)
 
         # 非紧凑：余额表
@@ -103,8 +108,6 @@ class CapitalPanel(QWidget):
             f"font-size:12px; font-weight:600;")
 
     def update_balances(self, balances: List[Dict], total_usdt: float):
-        if total_usdt > 0:
-            self.total_value_label.setText(f"{total_usdt:,.2f} USDT")
         if self.balance_table is not None:
             self.balance_table.setRowCount(len(balances))
             from PyQt6.QtWidgets import QTableWidgetItem
@@ -114,10 +117,15 @@ class CapitalPanel(QWidget):
                 self.balance_table.setItem(i, 2, QTableWidgetItem(f"{b['locked']:.4f}"))
 
     def update_status(self, status: Dict):
+        self._exchange_mode = False
+        self.source_label.setText("本地资金池")
+        self.source_label.setToolTip("未连接交易所时显示本地策略资金池")
+        self._set_caption_texts(
+            ["可用资金", "冻结资金", "持仓保证金", "风险准备金"]
+        )
         t = Theme.colors()
         total = status.get("total", 0)
-        if total > 0:
-            self.total_value_label.setText(f"{total:,.2f} USDT")
+        self.total_value_label.setText(f"{total:,.2f} USDT")
         self.available_label.setText(f"{status.get('available', 0):,.2f}")
         self.locked_label.setText(f"{status.get('locked', 0):,.2f}")
         self.margin_label.setText(f"{status.get('margin', 0):,.2f}")
@@ -127,3 +135,68 @@ class CapitalPanel(QWidget):
                      self.margin_label, self.reserve_label]:
             lbl.setStyleSheet(
                 f"font-size:13px; font-weight:600; color:{t['text_primary']};")
+
+    def update_exchange_snapshot(
+        self,
+        snapshot: Dict,
+        reserve_ratio: float = 0.20,
+    ):
+        """显示同一时间点的 Binance 账户快照，避免本地值覆盖实盘值。"""
+        self._exchange_mode = True
+        total = float(snapshot.get("total_value_usdt", 0) or 0)
+        available = float(snapshot.get("available_usdt", 0) or 0)
+        locked = float(snapshot.get("locked_value_usdt", 0) or 0)
+        non_usdt = float(
+            snapshot.get("non_usdt_value_usdt", 0) or 0
+        )
+        reserve = total * reserve_ratio
+        updated_at = float(snapshot.get("updated_at", 0) or 0)
+        time_text = (
+            datetime.fromtimestamp(updated_at).strftime("%H:%M:%S")
+            if updated_at else "--:--:--"
+        )
+
+        self.total_value_label.setText(f"{total:,.2f} USDT")
+        self.available_label.setText(f"{available:,.2f}")
+        self.locked_label.setText(f"{locked:,.2f}")
+        self.margin_label.setText(f"{non_usdt:,.2f}")
+        self.reserve_label.setText(f"{reserve:,.2f}")
+        self.source_label.setText(f"币安 · {time_text}")
+
+        missing = snapshot.get("unpriced_assets", [])
+        tooltip = "数据来自 Binance 账户余额与实时 USDT 估值"
+        if missing:
+            tooltip += f"；未计价资产：{', '.join(missing)}"
+        self.source_label.setToolTip(tooltip)
+        self._set_caption_texts(
+            ["可用 USDT", "冻结资产", "非 USDT 资产", "计划准备金"]
+        )
+
+        t = Theme.colors()
+        for lbl in [
+            self.available_label,
+            self.locked_label,
+            self.margin_label,
+            self.reserve_label,
+        ]:
+            lbl.setStyleSheet(
+                f"font-size:13px; font-weight:600; "
+                f"color:{t['text_primary']};"
+            )
+
+    def clear_exchange_snapshot(self):
+        self._exchange_mode = False
+        self.source_label.setText("未连接")
+        self.source_label.setToolTip("")
+        self.total_value_label.setText("0.00 USDT")
+        for label in [
+            self.available_label,
+            self.locked_label,
+            self.margin_label,
+            self.reserve_label,
+        ]:
+            label.setText("0.00")
+
+    def _set_caption_texts(self, captions: List[str]):
+        for label, text in zip(self._cap_labels.values(), captions):
+            label.setText(text)

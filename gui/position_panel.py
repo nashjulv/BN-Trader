@@ -32,8 +32,9 @@ class PositionPanel(QWidget):
         layout.setSpacing(6)
 
         hdr = QHBoxLayout()
-        self._title = QLabel("当前持仓")
+        self._title = QLabel("策略持仓")
         self._title.setObjectName("sectionTitle")
+        self._title.setToolTip("仅展示本应用执行并跟踪的策略持仓")
         hdr.addWidget(self._title)
         hdr.addStretch()
         self.total_pnl_label = QLabel("总盈亏: 0.00")
@@ -44,7 +45,7 @@ class PositionPanel(QWidget):
         self._list.setSpacing(6)
         layout.addLayout(self._list)
 
-        self._empty = QLabel("暂无持仓")
+        self._empty = QLabel("暂无策略持仓")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setObjectName("dimLabel")
         layout.addWidget(self._empty)

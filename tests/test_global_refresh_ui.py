@@ -51,6 +51,19 @@ def test_global_refresh_can_clear_manual_exit_prices():
     assert app is QApplication.instance()
 
 
+def test_trade_action_buttons_are_compact_and_clear():
+    app = _app()
+    panel = TradePanel()
+
+    assert panel.buy_btn.text() == "买入"
+    assert panel.sell_btn.text() == "卖出"
+    assert panel.buy_btn.height() == 36
+    assert panel.sell_btn.height() == 36
+    assert panel.buy_btn.accessibleName() == "买入"
+    assert panel.sell_btn.accessibleName() == "卖出"
+    assert app is QApplication.instance()
+
+
 def test_market_update_clears_any_unedited_value_from_stop_loss():
     app = _app()
     panel = TradePanel()

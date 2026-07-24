@@ -245,6 +245,11 @@ class RiskManager:
             f"连续亏损={self.state.consecutive_loss}"
         )
 
+    def record_order_execution(self):
+        """记录本应用已被交易所接受或已模拟执行的一笔订单。"""
+        self.state.daily_trades += 1
+        logger.info("日交易次数更新: %s", self.state.daily_trades)
+
     def update_drawdown(self, current_capital: float, peak_capital: float):
         """更新回撤"""
         if peak_capital > 0:

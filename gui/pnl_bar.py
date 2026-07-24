@@ -63,8 +63,9 @@ class PnlBar(QWidget):
         layout.addWidget(self._vsep())
 
         # --- 今日盈亏 ---
-        col1 = self._stat_block("今日盈亏", "+0.00 USDT")
+        col1 = self._stat_block("策略盈亏", "+0.00 USDT")
         self.daily_pnl_label = col1[1]
+        self.daily_pnl_label.setToolTip("仅统计本应用记录的策略已实现盈亏")
         layout.addLayout(col1[0])
 
         layout.addWidget(self._vsep())
@@ -72,13 +73,17 @@ class PnlBar(QWidget):
         # --- 总权益 ---
         col2 = self._stat_block("总权益", "10,000.00 USDT")
         self.total_label = col2[1]
+        self.total_label.setToolTip(
+            "连接 API 后显示 Binance 账户实时 USDT 估值"
+        )
         layout.addLayout(col2[0])
 
         layout.addWidget(self._vsep())
 
         # --- 胜率 ---
-        col3 = self._stat_block("胜率", "--")
+        col3 = self._stat_block("策略胜率", "--")
         self.win_rate_label = col3[1]
+        self.win_rate_label.setToolTip("仅统计本应用已完成并记录的策略交易")
         layout.addLayout(col3[0])
 
         layout.addStretch()
@@ -260,7 +265,9 @@ class PnlBar(QWidget):
         self.total_label.setText(f"{total:,.2f} USDT")
         self.total_label.setStyleSheet(
             f"font-size:13px; font-weight:700; color:{t['text_primary']};")
-        self.win_rate_label.setText(f"{win_rate:.2%}")
+        self.win_rate_label.setText(
+            "--" if win_rate is None else f"{win_rate:.2%}"
+        )
         self.win_rate_label.setStyleSheet(
             f"font-size:13px; font-weight:700; color:{t['text_primary']};")
 

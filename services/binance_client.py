@@ -125,28 +125,41 @@ class BinanceClient:
                 return self.session.delete(url, params=request_params, timeout=10)
             raise ValueError(f"不支持的HTTP方法: {method}")
 
-        try:
-            response = send(prepare_params())
-
-            # 设置页更新过凭据但运行中的客户端尚未刷新时，自动恢复一次。
-            if signed and response.status_code == 401:
-                self.reload_keys()
+        attempts = 3 if method == "GET" else 1
+        for attempt in range(attempts):
+            try:
                 response = send(prepare_params())
 
-            if not response.ok:
-                try:
-                    payload = response.json()
-                except (ValueError, json.JSONDecodeError):
-                    payload = {}
-                raise BinanceAPIError(
-                    response.status_code,
-                    payload.get("code"),
-                    payload.get("msg") or response.reason,
+                # 设置页更新过凭据但运行中的客户端尚未刷新时，自动恢复一次。
+                if signed and response.status_code == 401:
+                    self.reload_keys()
+                    response = send(prepare_params())
+
+                if not response.ok:
+                    try:
+                        payload = response.json()
+                    except (ValueError, json.JSONDecodeError):
+                        payload = {}
+                    raise BinanceAPIError(
+                        response.status_code,
+                        payload.get("code"),
+                        payload.get("msg") or response.reason,
+                    )
+                return response.json()
+            except requests.exceptions.RequestException as error:
+                if attempt + 1 >= attempts:
+                    logger.error("API请求失败 %s: %s", endpoint, error)
+                    raise
+                delay = 0.25 * (2 ** attempt)
+                logger.warning(
+                    "API GET 短暂中断，%.2f 秒后重试 %s（%s/%s）: %s",
+                    delay,
+                    endpoint,
+                    attempt + 2,
+                    attempts,
+                    error,
                 )
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            logger.error(f"API请求失败: {e}")
-            raise
+                time.sleep(delay)
 
     # ------ 行情数据 ------
 

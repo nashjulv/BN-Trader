@@ -287,16 +287,16 @@ def _stylesheet(t: dict) -> str:
     QPushButton#buyBtn {{
         background-color: {t["buy"]};
         color: #fff; border: none;
-        font-size: 15px; font-weight: 700;
-        min-height: 44px; border-radius: {R_BUTTON};
+        font-size: 13px; font-weight: 600;
+        min-height: 32px; padding:2px 12px; border-radius: {R_BUTTON};
     }}
     QPushButton#buyBtn:hover {{ background-color: {t["buy"]}; color:#fff; }}
 
     QPushButton#sellBtn {{
         background-color: {t["sell"]};
         color: #fff; border: none;
-        font-size: 15px; font-weight: 700;
-        min-height: 44px; border-radius: {R_BUTTON};
+        font-size: 13px; font-weight: 600;
+        min-height: 32px; padding:2px 12px; border-radius: {R_BUTTON};
     }}
     QPushButton#sellBtn:hover {{ background-color: {t["sell"]}; color:#fff; }}
 

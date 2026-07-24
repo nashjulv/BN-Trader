@@ -44,7 +44,7 @@ class RiskPanel(QWidget):
         self.daily_loss_bar.setTextVisible(False)
         self._daily_pct = QLabel("0%")
 
-        self.daily_trades_label = QLabel("仓位控制")
+        self.daily_trades_label = QLabel("日交易次数")
         self.daily_trades_bar = QProgressBar()
         self.daily_trades_bar.setMaximum(100)
         self.daily_trades_bar.setTextVisible(False)

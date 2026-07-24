@@ -56,14 +56,14 @@ class _RadarWidget(QWidget):
         w = self.width()
         h = self.height()
         cx, cy = w / 2, h / 2
-        label_w = max(58.0, min(76.0, w * 0.34))
-        label_h = 34.0
+        label_w = max(52.0, min(64.0, w * 0.28))
+        label_h = 28.0
         radius = max(
             24.0,
             min(
-                (w - label_w * 0.9) / 2,
-                (h - label_h * 2) / 2,
-            ) - 4,
+                w / 2 - label_w * 0.48,
+                h / 2 - label_h * 0.72,
+            ) - 2,
         )
 
         n = len(_RADAR_KEYS)
@@ -105,7 +105,7 @@ class _RadarWidget(QWidget):
 
         # ---- 标签 ----
         font = QFont()
-        font.setPixelSize(11)
+        font.setPixelSize(10)
         font.setWeight(QFont.Weight.Medium if not dark else QFont.Weight.Normal)
         p.setFont(font)
 
@@ -114,17 +114,20 @@ class _RadarWidget(QWidget):
             label = _RADAR_NAMES.get(key, key)
             text = f"{label}\n{score:.0%}"
             p.setPen(QPen(QColor(t["text_secondary"]), 1))
-            self._draw_label(p, key, w, h, label_w, label_h, text)
+            self._draw_label(
+                p, key, w, h, radius, label_w, label_h, text
+            )
 
         p.end()
 
     def _draw_label(self, painter: QPainter, key: str,
                     width: float, height: float,
+                    radius: float,
                     label_width: float, label_height: float,
                     text: str):
-        """将五个维度固定在顶部和四角，窗口缩放时不随顶点漂移。"""
+        """将标签固定在五个外顶点附近，不随数据多边形漂移。"""
         rect, alignment = self._label_slot(
-            key, width, height, label_width, label_height
+            key, width, height, radius, label_width, label_height
         )
         painter.setPen(QPen(QColor(Theme.c("text_secondary")), 1))
         painter.drawText(
@@ -135,50 +138,49 @@ class _RadarWidget(QWidget):
 
     @staticmethod
     def _label_slot(key: str, width: float, height: float,
+                    radius: float = None,
                     label_width: float = 64,
-                    label_height: float = 34):
-        """返回稳定的标签矩形与对齐方式，便于布局测试。"""
+                    label_height: float = 28):
+        """返回靠近雷达图五个外顶点的稳定标签矩形。"""
         inset = 2.0
-        top_y = max(label_height - 4, height * 0.18)
-        bottom_y = height - label_height - inset
-        slots = {
-            "TRENDING": (
-                QRectF(
-                    (width - label_width) / 2,
-                    inset,
-                    label_width,
-                    label_height,
-                ),
-                Qt.AlignmentFlag.AlignHCenter,
+        cx, cy = width / 2, height / 2
+        if radius is None:
+            radius = max(
+                24.0,
+                min(
+                    width / 2 - label_width * 0.48,
+                    height / 2 - label_height * 0.72,
+                ) - 2,
+            )
+        index = _RADAR_KEYS.index(key)
+        angle = math.radians(-90 + index * 360 / len(_RADAR_KEYS))
+        vx = cx + radius * math.cos(angle)
+        vy = cy + radius * math.sin(angle)
+        dx, dy = math.cos(angle), math.sin(angle)
+        label_center_x = vx + dx * 11
+        label_center_y = vy + dy * 9
+        x = max(
+            inset,
+            min(
+                width - label_width - inset,
+                label_center_x - label_width / 2,
             ),
-            "RANGING": (
-                QRectF(inset, top_y, label_width, label_height),
-                Qt.AlignmentFlag.AlignLeft,
+        )
+        y = max(
+            inset,
+            min(
+                height - label_height - inset,
+                label_center_y - label_height / 2,
             ),
-            "BREAKOUT": (
-                QRectF(
-                    width - label_width - inset,
-                    top_y,
-                    label_width,
-                    label_height,
-                ),
-                Qt.AlignmentFlag.AlignRight,
-            ),
-            "REVERSAL": (
-                QRectF(inset, bottom_y, label_width, label_height),
-                Qt.AlignmentFlag.AlignLeft,
-            ),
-            "EXTREME": (
-                QRectF(
-                    width - label_width - inset,
-                    bottom_y,
-                    label_width,
-                    label_height,
-                ),
-                Qt.AlignmentFlag.AlignRight,
-            ),
+        )
+        alignment = {
+            "TRENDING": Qt.AlignmentFlag.AlignHCenter,
+            "RANGING": Qt.AlignmentFlag.AlignLeft,
+            "BREAKOUT": Qt.AlignmentFlag.AlignRight,
+            "REVERSAL": Qt.AlignmentFlag.AlignLeft,
+            "EXTREME": Qt.AlignmentFlag.AlignRight,
         }
-        return slots[key]
+        return QRectF(x, y, label_width, label_height), alignment[key]
 
     # ---------- 几何工具 ----------
 

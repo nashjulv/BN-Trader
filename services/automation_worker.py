@@ -1,6 +1,7 @@
 """后台执行单个自动化任务的行情获取与策略评估。"""
 
 from PyQt6.QtCore import QThread, pyqtSignal
+import requests
 
 from indicators.technical import calculate_all_indicators
 from services.automation_manager import AutomationTask
@@ -91,6 +92,12 @@ class AutomationEvaluationWorker(QThread):
                     "confidence": signal.confidence,
                     "reason": signal.reason,
                 },
+            })
+        except requests.exceptions.RequestException as error:
+            self.evaluated.emit(self.task.id, {
+                "ok": False,
+                "retryable": True,
+                "message": f"网络暂时异常，将按任务周期重试：{error}",
             })
         except Exception as error:
             self.evaluated.emit(self.task.id, {

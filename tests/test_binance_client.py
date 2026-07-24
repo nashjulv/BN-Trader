@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import requests
+
 from services.binance_client import (
     BinanceAPIError,
     BinanceClient,
@@ -83,6 +85,49 @@ def test_signed_request_reloads_credentials_and_retries_once(monkeypatch):
     assert len(calls) == 2
     assert len(reloads) == 1
     assert calls[0][1]["signature"] != calls[1][1]["signature"]
+
+
+def test_get_retries_transient_ssl_eof(monkeypatch):
+    client = BinanceClient()
+    calls = []
+    responses = [
+        requests.exceptions.SSLError("unexpected eof"),
+        requests.exceptions.SSLError("unexpected eof"),
+        FakeResponse(200, {"serverTime": 123}),
+    ]
+
+    def fake_get(url, params, timeout):
+        calls.append(url)
+        result = responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(client.session, "get", fake_get)
+    monkeypatch.setattr("services.binance_client.time.sleep", lambda _: None)
+
+    assert client.get_server_time() == 123
+    assert len(calls) == 3
+
+
+def test_post_is_not_retried_after_transport_failure(monkeypatch):
+    client = BinanceClient()
+    calls = []
+
+    def fake_post(url, data, timeout):
+        calls.append(url)
+        raise requests.exceptions.SSLError("unexpected eof")
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+
+    try:
+        client.test_order("BTCUSDT", quote_order_qty=10)
+    except requests.exceptions.SSLError:
+        pass
+    else:
+        raise AssertionError("expected SSLError")
+
+    assert len(calls) == 1
 
 
 def test_api_error_preserves_binance_code_without_signed_url(monkeypatch):

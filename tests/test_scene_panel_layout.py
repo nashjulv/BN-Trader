@@ -28,31 +28,37 @@ def test_scene_buttons_follow_requested_display_order():
     assert app is QApplication.instance()
 
 
-def test_radar_labels_use_fixed_corner_slots():
+def test_radar_labels_stay_near_the_five_outer_vertices():
     width, height = 220, 180
+    radius = 62
+    slots = {
+        key: _RadarWidget._label_slot(
+            key, width, height, radius=radius
+        )
+        for key in [
+            "TRENDING", "RANGING", "BREAKOUT", "REVERSAL", "EXTREME"
+        ]
+    }
 
-    trend, trend_align = _RadarWidget._label_slot(
-        "TRENDING", width, height
-    )
-    ranging, ranging_align = _RadarWidget._label_slot(
-        "RANGING", width, height
-    )
-    breakout, breakout_align = _RadarWidget._label_slot(
-        "BREAKOUT", width, height
-    )
-    reversal, reversal_align = _RadarWidget._label_slot(
-        "REVERSAL", width, height
-    )
-    extreme, extreme_align = _RadarWidget._label_slot(
-        "EXTREME", width, height
-    )
+    trend, trend_align = slots["TRENDING"]
+    ranging, ranging_align = slots["RANGING"]
+    breakout, breakout_align = slots["BREAKOUT"]
+    reversal, reversal_align = slots["REVERSAL"]
+    extreme, extreme_align = slots["EXTREME"]
 
     assert trend.center().x() == width / 2
-    assert trend.top() == 2
-    assert ranging.left() == reversal.left() == 2
-    assert breakout.right() == extreme.right() == width - 2
-    assert ranging.top() == breakout.top()
-    assert reversal.bottom() == extreme.bottom() == height - 2
+    assert trend.center().y() < height / 2
+    assert ranging.center().x() < width / 2
+    assert breakout.center().x() > width / 2
+    assert reversal.center().x() < width / 2
+    assert extreme.center().x() > width / 2
+    assert reversal.center().y() > height / 2
+    assert extreme.center().y() > height / 2
+    for rect, _alignment in slots.values():
+        assert rect.left() >= 2
+        assert rect.top() >= 2
+        assert rect.right() <= width - 2
+        assert rect.bottom() <= height - 2
     assert trend_align == Qt.AlignmentFlag.AlignHCenter
     assert ranging_align == reversal_align == Qt.AlignmentFlag.AlignLeft
     assert breakout_align == extreme_align == Qt.AlignmentFlag.AlignRight
