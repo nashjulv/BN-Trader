@@ -17,6 +17,7 @@
 """
 
 import logging
+import time
 from typing import Dict, Optional
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -36,6 +37,7 @@ from gui.capital_panel import CapitalPanel
 from gui.scene_panel import ScenePanel
 from gui.risk_panel import RiskPanel
 from gui.trade_panel import TradePanel
+from gui.open_orders_panel import OpenOrdersPanel
 from gui.position_panel import PositionPanel
 from gui.log_panel import LogPanel
 from gui.strategy_settings_dialog import (StrategySettingsPage,
@@ -66,6 +68,30 @@ from indicators.technical import calculate_all_indicators
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_open_order(order: Dict) -> Dict:
+    """将币安字段转换为右侧挂单面板使用的稳定结构。"""
+    executed_quantity = float(order.get("executedQty", 0) or 0)
+    price = float(order.get("price", 0) or 0)
+    if price <= 0 and executed_quantity > 0:
+        quote_quantity = float(
+            order.get("cummulativeQuoteQty", 0) or 0
+        )
+        if quote_quantity > 0:
+            price = quote_quantity / executed_quantity
+    return {
+        "order_id": str(order.get("orderId", order.get("order_id", ""))),
+        "symbol": str(order.get("symbol", "")),
+        "side": str(order.get("side", "BUY")).upper(),
+        "quantity": float(
+            order.get("origQty", order.get("quantity", 0)) or 0
+        ),
+        "executed_quantity": executed_quantity,
+        "price": price,
+        "status": str(order.get("status", "NEW")),
+        "type": str(order.get("type", "")),
+    }
 
 
 class DataWorker(QThread):
@@ -99,6 +125,61 @@ class DataWorker(QThread):
         self.running = False
 
 
+class OpenOrdersWorker(QThread):
+    orders_updated = pyqtSignal(list)
+    failed = pyqtSignal(str)
+
+    def __init__(self, client: BinanceClient, symbol: str):
+        super().__init__()
+        self.client = client
+        self.symbol = symbol
+
+    def run(self):
+        try:
+            open_orders = self.client.get_open_orders()
+            recent_orders = self.client.get_all_orders(
+                self.symbol, limit=10
+            )
+            merged = {}
+            for order in recent_orders:
+                merged[str(order.get("orderId", ""))] = order
+            for order in open_orders:
+                merged[str(order.get("orderId", ""))] = order
+            self.orders_updated.emit(list(merged.values()))
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
+class ApiConnectionWorker(QThread):
+    completed = pyqtSignal(dict)
+    failed = pyqtSignal(str)
+
+    def __init__(self, client: BinanceClient, symbol: str):
+        super().__init__()
+        self.client = client
+        self.symbol = symbol
+
+    def run(self):
+        started = time.monotonic()
+        try:
+            account = self.client.get_account()
+            trade_ok = True
+            trade_message = ""
+            try:
+                self.client.test_order(self.symbol)
+            except Exception as error:
+                trade_ok = False
+                trade_message = str(error)
+            self.completed.emit({
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "account_can_trade": bool(account.get("canTrade", False)),
+                "trade_test_ok": trade_ok,
+                "trade_message": trade_message,
+            })
+        except Exception as error:
+            self.failed.emit(str(error))
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -124,6 +205,11 @@ class MainWindow(QMainWindow):
         self.current_klines: Optional[pd.DataFrame] = None
         self.current_scene: Optional[Scene] = None
         self.positions = []
+        self.exchange_balances = {}
+        self.open_orders = []
+        self._known_open_order_ids = set()
+        self.open_orders_worker: Optional[OpenOrdersWorker] = None
+        self.api_connection_worker: Optional[ApiConnectionWorker] = None
         self._last_auto_signals = {}
         self._auto_trading = False
         self._strategy_configured = self._check_strategy_configured()
@@ -131,7 +217,7 @@ class MainWindow(QMainWindow):
 
         self._init_ui()
         self._apply_global_settings(load_global_settings(), announce=False)
-        self.pnl_bar.set_api_status(self.client.has_keys())
+        self.pnl_bar.set_api_status(False)
 
         self.account_sync.balances_updated.connect(self._on_balances_updated)
         self.account_sync.total_value_updated.connect(self._on_total_value_updated)
@@ -142,6 +228,7 @@ class MainWindow(QMainWindow):
         self._init_menu()
         self._apply_theme()
         self._start_data_worker()
+        QTimer.singleShot(300, self._test_api_connection)
 
         self.update_timer = QTimer()
         self.update_timer.timeout.connect(self._periodic_update)
@@ -150,6 +237,10 @@ class MainWindow(QMainWindow):
         self.automation_timer = QTimer()
         self.automation_timer.timeout.connect(self._automation_tick)
         self.automation_timer.start(1000)
+
+        self.open_orders_timer = QTimer()
+        self.open_orders_timer.timeout.connect(self._sync_open_orders)
+        self.open_orders_timer.start(30000)
 
         logger.info("主窗口初始化完成")
 
@@ -221,7 +312,9 @@ class MainWindow(QMainWindow):
         self.page_stack.addWidget(self._pages["research"])
 
         self.api_page = ApiSettingsPage()
-        self.api_page._save_btn.clicked.connect(self._on_api_page_saved)
+        self.api_page.credentials_changed.connect(
+            self._on_api_credentials_changed
+        )
         self.api_page._cancel_btn.clicked.connect(
             lambda: self._on_sidebar_nav("dashboard"))
         self._pages["settings"] = self.api_page
@@ -252,6 +345,7 @@ class MainWindow(QMainWindow):
         self.pnl_bar.api_settings_clicked.connect(
             lambda: self._on_sidebar_nav("settings"))
         self.pnl_bar.symbol_changed.connect(self._on_symbol_changed)
+        self.pnl_bar.refresh_requested.connect(self._refresh_all_data)
         layout.addWidget(self.pnl_bar)
 
         # 三栏主体
@@ -317,6 +411,11 @@ class MainWindow(QMainWindow):
         self.trade_panel = TradePanel()
         self.trade_panel.place_order.connect(self._on_place_order)
         rv.addWidget(self.trade_panel)
+        self.open_orders_panel = OpenOrdersPanel()
+        self.open_orders_panel.refresh_requested.connect(
+            self._sync_open_orders
+        )
+        rv.addWidget(self.open_orders_panel)
         right_wrap.setMinimumWidth(230)
         right_wrap.setMaximumWidth(300)
         self.body_splitter.addWidget(right_wrap)
@@ -400,7 +499,7 @@ class MainWindow(QMainWindow):
 
         for panel in [self.scene_panel, self.capital_panel, self.risk_panel,
                        self.position_panel, self.log_panel, self.trade_panel,
-                       self.log_detail]:
+                       self.open_orders_panel, self.log_detail]:
             if hasattr(panel, '_refresh_theme'):
                 panel._refresh_theme()
 
@@ -501,6 +600,9 @@ class MainWindow(QMainWindow):
             self._status_api.setText("API ✓" if ok else "API ✗")
             self._status_api.setStyleSheet(
                 f"color:{t['success'] if ok else t['danger']}; font-size:12px;")
+            self.pnl_bar.set_refreshing(False)
+            if self._status_msg.text() == "正在刷新全部数据…":
+                self._status_msg.setText("刷新完成")
 
         except Exception as e:
             logger.error(f"数据处理: {e}")
@@ -518,6 +620,7 @@ class MainWindow(QMainWindow):
             self.chart_widget.symbol_combo.setCurrentIndex(idx)
         self.chart_widget.symbol_combo.blockSignals(False)
         self.trade_panel.symbol_combo.setCurrentText(symbol)
+        self._update_trade_balances()
         self._start_data_worker()
 
     # ==================================================================
@@ -566,9 +669,23 @@ class MainWindow(QMainWindow):
                 symbol, side, qty, price, order_type)
             if result and result.get("status") in ("FILLED", "NEW"):
                 order_status = result["status"]
+                qty = float(result.get("quantity", qty))
+                if float(result.get("price", 0) or 0) > 0:
+                    price = float(result["price"])
                 self.log_panel.add_trade_log(
-                    f"实盘 {side} {symbol} {qty:.4f}@{price:.2f} [{result['status']}]",
+                    f"实盘订单 {side} {symbol} {qty:.4f}@{price:.2f} "
+                    f"[{result['status']}] · 订单号 {result.get('order_id', '—')}",
                     "SUCCESS")
+                if order_status == "NEW":
+                    self._upsert_open_order({
+                        "order_id": result.get("order_id", ""),
+                        "symbol": symbol,
+                        "side": side,
+                        "quantity": qty,
+                        "price": price,
+                        "status": "NEW",
+                        "type": order_type,
+                    })
                 self._sync_account()
             else:
                 self.log_panel.add_system_log("下单失败", "CRITICAL")
@@ -881,17 +998,99 @@ class MainWindow(QMainWindow):
             self.log_panel.add_system_log("全局参数已应用")
         self._update_all_panels()
 
-    def _on_api_page_saved(self):
-        if self.api_page.saved:
-            t = Theme.colors()
-            self._status_api.setText("API ✓")
-            self._status_api.setStyleSheet(
-                f"color:{t['success']}; font-size:12px;")
-            self.pnl_bar.set_api_status(True)
-            self.client.reload_keys()
-            self.log_panel.add_system_log("API Key 已更新，正在同步...")
-            self._sync_account()
+    def _on_api_credentials_changed(self, has_credentials: bool):
+        self.client.reload_keys()
+        t = Theme.colors()
+        if has_credentials:
+            self.log_panel.add_system_log("API Key 已更新，正在自动测试...")
+            self._test_api_connection()
             self.api_page.saved = False
+            return
+
+        self._status_api.setText("API ✗")
+        self._status_api.setStyleSheet(
+            f"color:{t['danger']}; font-size:12px;"
+        )
+        self.pnl_bar.set_api_status(False)
+        self.account_sync.balances = []
+        self.account_sync.total_value_usdt = 0
+        self.exchange_balances = {}
+        self.capital_panel.update_balances([], 0)
+        self.trade_panel.set_available(0)
+        self.open_orders = []
+        self._known_open_order_ids.clear()
+        self.open_orders_panel.update_orders([])
+        self.log_panel.add_system_log(
+            "API Key、Secret Key 与运行时缓存已清除"
+        )
+
+    def _test_api_connection(self):
+        """启动或凭据更新后自动完成鉴权与无成交下单测试。"""
+        if not self.client.has_keys():
+            self._status_api.setText("API ✗")
+            self.pnl_bar.set_api_status(False)
+            return
+        if (
+            self.api_connection_worker
+            and self.api_connection_worker.isRunning()
+        ):
+            return
+        t = Theme.colors()
+        self._status_api.setText("API …")
+        self._status_api.setStyleSheet(
+            f"color:{t['text_secondary']}; font-size:12px;"
+        )
+        self.pnl_bar.set_api_connecting()
+        worker = ApiConnectionWorker(self.client, self.current_symbol)
+        self.api_connection_worker = worker
+        worker.completed.connect(self._on_api_connection_completed)
+        worker.failed.connect(self._on_api_connection_failed)
+        worker.finished.connect(self._on_api_connection_finished)
+        worker.start()
+
+    def _on_api_connection_completed(self, result: Dict):
+        if not self.client.has_keys():
+            return
+        t = Theme.colors()
+        self._status_api.setText("API ✓")
+        self._status_api.setStyleSheet(
+            f"color:{t['success']}; font-size:12px;"
+        )
+        self.pnl_bar.set_api_status(True)
+        self.api_page._connected = True
+        self.api_page._update_status_badge()
+        latency = int(result.get("latency_ms", 0))
+        if result.get("trade_test_ok") and result.get("account_can_trade"):
+            self.log_panel.add_system_log(
+                f"API 自动连接成功 · 现货测试通过 · {latency} ms",
+                "SUCCESS",
+            )
+        else:
+            reason = result.get("trade_message") or "账户未开放交易"
+            self.log_panel.add_system_log(
+                f"API 已连接，但现货测试未通过: {reason}", "WARNING"
+            )
+        self._sync_account()
+        self._sync_open_orders()
+
+    def _on_api_connection_failed(self, message: str):
+        t = Theme.colors()
+        self._status_api.setText("API ✗")
+        self._status_api.setStyleSheet(
+            f"color:{t['danger']}; font-size:12px;"
+        )
+        self.pnl_bar.set_api_status(False)
+        self.api_page._connected = False
+        self.api_page._update_status_badge()
+        self.log_panel.add_system_log(
+            f"API 自动连接失败: {message}", "ERROR"
+        )
+
+    def _on_api_connection_finished(self):
+        worker = self.api_connection_worker
+        self.api_connection_worker = None
+        if worker:
+            worker.deleteLater()
 
     def _show_api_settings(self):
         self._on_sidebar_nav("settings")
@@ -902,18 +1101,128 @@ class MainWindow(QMainWindow):
     def _sync_account(self):
         self.account_sync.sync()
 
+    def _sync_open_orders(self):
+        """后台同步币安当前挂单，避免阻塞主界面。"""
+        if not self.client.has_keys():
+            self.open_orders = []
+            self.open_orders_panel.update_orders([])
+            return
+        if self.open_orders_worker and self.open_orders_worker.isRunning():
+            return
+        self.open_orders_panel.set_loading(True)
+        worker = OpenOrdersWorker(self.client, self.current_symbol)
+        self.open_orders_worker = worker
+        worker.orders_updated.connect(self._on_open_orders_updated)
+        worker.failed.connect(self._on_open_orders_failed)
+        worker.finished.connect(self._on_open_orders_sync_finished)
+        worker.start()
+
+    def _on_open_orders_updated(self, raw_orders):
+        orders = [normalize_open_order(order) for order in raw_orders]
+        orders.sort(key=lambda order: order.get("order_id", ""), reverse=True)
+        previous = {
+            str(order.get("order_id", "")): order
+            for order in self.open_orders
+            if order.get("order_id")
+        }
+        current_ids = {
+            order["order_id"] for order in orders if order["order_id"]
+        }
+
+        for order in orders:
+            order_id = order["order_id"]
+            if order_id and order_id not in self._known_open_order_ids:
+                action = {
+                    "FILLED": "成交同步",
+                    "CANCELED": "撤单同步",
+                    "EXPIRED": "失效订单同步",
+                    "REJECTED": "拒绝订单同步",
+                }.get(order["status"], "挂单同步")
+                self.log_panel.add_trade_log(
+                    f"{action} {order['side']} {order['symbol']} "
+                    f"{order['quantity']:g}@{order['price']:.2f} "
+                    f"[{order['status']}] · 订单号 {order_id}",
+                    "INFO",
+                )
+                self._known_open_order_ids.add(order_id)
+
+        for order_id, order in previous.items():
+            if order_id not in current_ids:
+                self.log_panel.add_trade_log(
+                    f"挂单已结束或成交 {order['side']} {order['symbol']} "
+                    f"· 订单号 {order_id}",
+                    "INFO",
+                )
+
+        self.open_orders = orders
+        self.open_orders_panel.update_orders(orders)
+
+    def _upsert_open_order(self, order: Dict):
+        normalized = normalize_open_order(order)
+        order_id = normalized["order_id"]
+        self.open_orders = [
+            existing for existing in self.open_orders
+            if existing.get("order_id") != order_id or not order_id
+        ]
+        self.open_orders.insert(0, normalized)
+        if order_id:
+            self._known_open_order_ids.add(order_id)
+        self.open_orders_panel.update_orders(self.open_orders)
+
+    def _on_open_orders_failed(self, message: str):
+        self.log_panel.add_system_log(
+            f"挂单同步失败: {message}", "WARNING"
+        )
+
+    def _on_open_orders_sync_finished(self):
+        self.open_orders_panel.set_loading(False)
+        worker = self.open_orders_worker
+        self.open_orders_worker = None
+        if worker:
+            worker.deleteLater()
+
     def _on_balances_updated(self, balances):
+        self.exchange_balances = {
+            str(balance.get("asset", "")): {
+                "free": float(balance.get("free", 0) or 0),
+                "locked": float(balance.get("locked", 0) or 0),
+            }
+            for balance in balances
+        }
         self.capital_panel.update_balances(
             balances, self.account_sync.total_value_usdt)
+        self._update_trade_balances()
+
+    def _update_trade_balances(self):
+        if not self.client.has_keys() or not self.exchange_balances:
+            return
+        symbol = self.current_symbol.upper()
+        quote_asset = "USDT" if symbol.endswith("USDT") else ""
+        base_asset = (
+            symbol[:-len(quote_asset)] if quote_asset else symbol
+        )
+        quote_free = self.exchange_balances.get(
+            quote_asset, {}
+        ).get("free", 0)
+        base_free = self.exchange_balances.get(
+            base_asset, {}
+        ).get("free", 0)
+        self.trade_panel.set_exchange_balances(
+            quote_free, base_free, base_asset, quote_asset or "USDT"
+        )
 
     def _on_total_value_updated(self, total_usdt: float):
         self.pnl_bar.update_pnl(
             self.capital_pool.daily_pnl, self.capital_pool.daily_pnl_ratio,
             self.capital_pool.total,
             self.capital_pool.win_count / max(self.capital_pool.total_trades, 1))
-        self.trade_panel.set_available(
-            self.capital_pool.available if self.capital_pool.available > 0
-            else total_usdt)
+        if self.client.has_keys() and self.exchange_balances:
+            self._update_trade_balances()
+        else:
+            self.trade_panel.set_available(
+                self.capital_pool.available
+                if self.capital_pool.available > 0 else total_usdt
+            )
 
     # ==================================================================
     #  风控
@@ -953,6 +1262,22 @@ class MainWindow(QMainWindow):
     #  刷新
     # ==================================================================
 
+    def _refresh_all_data(self):
+        """刷新行情、账户与页面状态，并清除交易对相关的手动退出价。"""
+        self._status_msg.setText("正在刷新全部数据…")
+        self.trade_panel.clear_exit_prices()
+        self.client.reload_keys()
+        self._start_data_worker()
+        if self.client.has_keys():
+            self._test_api_connection()
+        self.automation_page.refresh()
+        self._update_all_panels()
+        self.log_panel.add_system_log(
+            f"手动刷新: {self.current_symbol}；已清空止盈止损价"
+        )
+        # 行情异常时也恢复按钮，允许用户再次尝试。
+        QTimer.singleShot(10000, lambda: self.pnl_bar.set_refreshing(False))
+
     def _periodic_update(self):
         self._update_all_panels()
         if self.risk_manager.review_required:
@@ -982,7 +1307,10 @@ class MainWindow(QMainWindow):
         self._status_risk.setStyleSheet(
             f"color:{t['success'] if ok else t['danger']}; font-size:12px;")
 
-        self.trade_panel.set_available(cs.get("available", 0))
+        if self.client.has_keys() and self.exchange_balances:
+            self._update_trade_balances()
+        else:
+            self.trade_panel.set_available(cs.get("available", 0))
 
         current_price = self.trade_panel.price_input.value()
         for pos in self.positions:
@@ -1019,6 +1347,13 @@ class MainWindow(QMainWindow):
         if self.automation_worker and self.automation_worker.isRunning():
             self.automation_worker.requestInterruption()
             self.automation_worker.wait(5000)
+        if self.open_orders_worker and self.open_orders_worker.isRunning():
+            self.open_orders_worker.wait(15000)
+        if (
+            self.api_connection_worker
+            and self.api_connection_worker.isRunning()
+        ):
+            self.api_connection_worker.wait(20000)
         if self.data_worker:
             self.data_worker.stop()
             self.data_worker.wait()

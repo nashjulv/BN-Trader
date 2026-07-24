@@ -5,11 +5,21 @@
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QComboBox, QDoubleSpinBox,
-                               QFrame, QButtonGroup, QMessageBox)
+                               QFrame, QButtonGroup, QMessageBox, QCheckBox)
 from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui.styles import Theme
 from config import Config
+
+
+class ManualPriceSpinBox(QDoubleSpinBox):
+    """可区分人工步进与程序 setValue 的价格输入框。"""
+
+    user_edited = pyqtSignal()
+
+    def stepBy(self, steps: int):
+        self.user_edited.emit()
+        super().stepBy(steps)
 
 
 def validate_exit_prices(
@@ -71,6 +81,37 @@ def validate_exit_prices(
     return True, ""
 
 
+def validate_available_balance(
+    side: str,
+    quantity: float,
+    price: float,
+    quote_available: float,
+    base_available: float,
+    base_asset: str = "BTC",
+    quote_asset: str = "USDT",
+) -> tuple[bool, str]:
+    """按币安 free 余额校验手动订单，避免提交必然失败的订单。"""
+    if side.upper() == "BUY":
+        required = quantity * price
+        if required > quote_available + 1e-9:
+            return (
+                False,
+                f"可用 {quote_asset} 余额不足。\n\n"
+                f"订单预计需要：{required:,.4f} {quote_asset}\n"
+                f"币安实际可用：{quote_available:,.4f} {quote_asset}\n\n"
+                "请减少数量，或同步账户后重试。",
+            )
+    elif quantity > base_available + 1e-12:
+        return (
+            False,
+            f"可用 {base_asset} 余额不足。\n\n"
+            f"计划卖出：{quantity:g} {base_asset}\n"
+            f"币安实际可用：{base_available:g} {base_asset}\n\n"
+            "请减少数量，或确认资产是否被其他挂单锁定。",
+        )
+    return True, ""
+
+
 class TradePanel(QWidget):
     place_order = pyqtSignal(str, str, float, float, float, float)
 
@@ -78,7 +119,15 @@ class TradePanel(QWidget):
         super().__init__()
         self.setMinimumWidth(240)
         self._available = 0.0
+        self._quote_available = 0.0
+        self._base_available = 0.0
+        self._base_asset = "BTC"
+        self._quote_asset = "USDT"
+        self._exchange_balance_mode = False
         self._last_price = 0.0
+        self._manual_enabled = True
+        self._stop_loss_user_edited = False
+        self._take_profit_user_edited = False
         self._max_loss_ratio = Config.MAX_LOSS_PER_TRADE
         self._init_ui()
         self._refresh_theme()
@@ -120,6 +169,7 @@ class TradePanel(QWidget):
             btn.setCheckable(True)
             btn.setFixedHeight(32)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip("按币安可用 USDT 余额计算买入数量")
             self.type_group.addButton(btn, i)
             type_row.addWidget(btn)
         self._limit_btn.setChecked(True)
@@ -163,30 +213,51 @@ class TradePanel(QWidget):
         sl_tp_row = QHBoxLayout()
         sl_tp_row.setSpacing(8)
 
-        tp_col = QVBoxLayout()
-        tp_cap = QLabel("止盈价 (USDT，可选)")
-        tp_cap.setObjectName("dimLabel")
-        self.take_profit_input = QDoubleSpinBox()
-        self.take_profit_input.setRange(0, 9999999)
-        self.take_profit_input.setDecimals(2)
-        self.take_profit_input.setSpecialValueText("—")
-        self.take_profit_input.setToolTip("填写止盈目标价格，不是百分比")
-        tp_col.addWidget(tp_cap)
-        tp_col.addWidget(self.take_profit_input)
-
         sl_col = QVBoxLayout()
-        sl_cap = QLabel("止损价 (USDT，可选)")
-        sl_cap.setObjectName("dimLabel")
-        self.stop_loss_input = QDoubleSpinBox()
+        self.stop_loss_enabled = QCheckBox("启用止损价 (USDT)")
+        self.stop_loss_enabled.setToolTip("勾选后，止损价才会参与订单校验")
+        self.stop_loss_input = ManualPriceSpinBox()
         self.stop_loss_input.setRange(0, 9999999)
         self.stop_loss_input.setDecimals(2)
         self.stop_loss_input.setSpecialValueText("—")
         self.stop_loss_input.setToolTip("填写止损目标价格，不是百分比")
-        sl_col.addWidget(sl_cap)
+        self.stop_loss_input.setEnabled(False)
+        self.stop_loss_input.lineEdit().textEdited.connect(
+            lambda _text: self._mark_exit_price_edited("stop_loss")
+        )
+        self.stop_loss_input.user_edited.connect(
+            lambda: self._mark_exit_price_edited("stop_loss")
+        )
+        self.stop_loss_enabled.toggled.connect(
+            lambda enabled: self._toggle_exit_price("stop_loss", enabled)
+        )
+        sl_col.addWidget(self.stop_loss_enabled)
         sl_col.addWidget(self.stop_loss_input)
 
-        sl_tp_row.addLayout(tp_col)
+        tp_col = QVBoxLayout()
+        self.take_profit_enabled = QCheckBox("启用止盈价 (USDT)")
+        self.take_profit_enabled.setToolTip("勾选后，止盈价才会参与订单校验")
+        self.take_profit_input = ManualPriceSpinBox()
+        self.take_profit_input.setRange(0, 9999999)
+        self.take_profit_input.setDecimals(2)
+        self.take_profit_input.setSpecialValueText("—")
+        self.take_profit_input.setToolTip("填写止盈目标价格，不是百分比")
+        self.take_profit_input.setEnabled(False)
+        self.take_profit_input.lineEdit().textEdited.connect(
+            lambda _text: self._mark_exit_price_edited("take_profit")
+        )
+        self.take_profit_input.user_edited.connect(
+            lambda: self._mark_exit_price_edited("take_profit")
+        )
+        self.take_profit_enabled.toggled.connect(
+            lambda enabled: self._toggle_exit_price("take_profit", enabled)
+        )
+        tp_col.addWidget(self.take_profit_enabled)
+        tp_col.addWidget(self.take_profit_input)
+
+        # 与交易逻辑顺序一致：先止损，再止盈。
         sl_tp_row.addLayout(sl_col)
+        sl_tp_row.addLayout(tp_col)
         layout.addLayout(sl_tp_row)
 
         self.exit_price_hint = QLabel("止盈/止损请输入目标价格，不填写百分比。")
@@ -274,9 +345,7 @@ class TradePanel(QWidget):
         base = symbol.split("/")[0] if "/" in symbol else symbol.removesuffix("USDT")
         self.qty_cap.setText(f"数量 ({base})")
         # 退出价是交易对相关的绝对价格，切换币种时不可沿用旧值。
-        self.stop_loss_input.setValue(0)
-        self.take_profit_input.setValue(0)
-        self._refresh_exit_hint()
+        self.clear_exit_prices()
 
     def update_price(self, price: float):
         self._last_price = float(price)
@@ -286,13 +355,37 @@ class TradePanel(QWidget):
         ):
             control.setDecimals(decimals)
             control.setSingleStep(10 ** -decimals)
+        # 行情只允许更新入场价。若外部刷新错误地把现货价写进退出价，
+        # 且用户从未编辑过该字段，则立即恢复为空。
+        self._clear_unedited_exit_prices()
         self.price_label.setText(f"{price:,.{decimals}f}")
         if not self.price_input.hasFocus():
             self.price_input.setValue(price)
 
     def set_available(self, amount: float):
+        self._exchange_balance_mode = False
         self._available = amount
         self.avail_label.setText(f"可用: {amount:,.2f} USDT")
+        self._update_estimate()
+
+    def set_exchange_balances(
+        self,
+        quote_amount: float,
+        base_amount: float,
+        base_asset: str,
+        quote_asset: str = "USDT",
+    ):
+        """使用交易所 free 余额，而不是本地模拟资金池。"""
+        self._exchange_balance_mode = True
+        self._available = max(0.0, float(quote_amount))
+        self._quote_available = self._available
+        self._base_available = max(0.0, float(base_amount))
+        self._base_asset = base_asset
+        self._quote_asset = quote_asset
+        self.avail_label.setText(
+            f"可用: {self._quote_available:,.2f} {quote_asset}"
+            f" · {self._base_available:g} {base_asset}"
+        )
         self._update_estimate()
 
     def _set_qty_pct(self, pct: int):
@@ -312,8 +405,14 @@ class TradePanel(QWidget):
 
     def _refresh_exit_hint(self):
         entry = self.price_input.value()
-        sl = self.stop_loss_input.value()
-        tp = self.take_profit_input.value()
+        sl = (
+            self.stop_loss_input.value()
+            if self.stop_loss_enabled.isChecked() else 0
+        )
+        tp = (
+            self.take_profit_input.value()
+            if self.take_profit_enabled.isChecked() else 0
+        )
         parts = []
         if entry > 0 and sl > 0:
             parts.append(f"止损距离 {abs(entry - sl) / entry:.2%}")
@@ -327,12 +426,67 @@ class TradePanel(QWidget):
     def set_max_loss_ratio(self, ratio: float):
         self._max_loss_ratio = max(0.0, float(ratio))
 
+    def _mark_exit_price_edited(self, field: str):
+        if field == "stop_loss":
+            self._stop_loss_user_edited = True
+        elif field == "take_profit":
+            self._take_profit_user_edited = True
+
+    def _toggle_exit_price(self, field: str, enabled: bool):
+        control = (
+            self.stop_loss_input
+            if field == "stop_loss"
+            else self.take_profit_input
+        )
+        control.setEnabled(enabled and self._manual_enabled)
+        if not enabled:
+            if field == "stop_loss":
+                self._stop_loss_user_edited = False
+            else:
+                self._take_profit_user_edited = False
+            control.setValue(0)
+        self._refresh_exit_hint()
+
+    def _clear_unedited_exit_prices(self):
+        """任何非用户输入的退出价都无效，避免行情或缓存误回填。"""
+        if not self._stop_loss_user_edited and self.stop_loss_input.value() > 0:
+            self.stop_loss_input.setValue(0)
+        if not self._take_profit_user_edited and self.take_profit_input.value() > 0:
+            self.take_profit_input.setValue(0)
+
+    def clear_exit_prices(self):
+        """清除与交易对价格绑定的手动退出价。"""
+        self._stop_loss_user_edited = False
+        self._take_profit_user_edited = False
+        self.stop_loss_enabled.setChecked(False)
+        self.take_profit_enabled.setChecked(False)
+        self.stop_loss_input.setValue(0)
+        self.take_profit_input.setValue(0)
+        self._refresh_exit_hint()
+
     def _submit_order(self, side: str):
         sym = self.symbol_combo.currentText()
         qty = self.qty_input.value()
         price = self.price_input.value()
-        sl = self.stop_loss_input.value()
-        tp = self.take_profit_input.value()
+        sl = (
+            self.stop_loss_input.value()
+            if self.stop_loss_enabled.isChecked() else 0
+        )
+        tp = (
+            self.take_profit_input.value()
+            if self.take_profit_enabled.isChecked() else 0
+        )
+        # 二次防护：未由用户输入、却与现货价相同的退出价视为空值，
+        # 避免错误的行情回填阻断手动下单。
+        self._clear_unedited_exit_prices()
+        sl = (
+            self.stop_loss_input.value()
+            if self.stop_loss_enabled.isChecked() else 0
+        )
+        tp = (
+            self.take_profit_input.value()
+            if self.take_profit_enabled.isChecked() else 0
+        )
         if qty <= 0:
             QMessageBox.warning(
                 self, "无法下单",
@@ -345,6 +499,22 @@ class TradePanel(QWidget):
                 self, "无法下单", "当前价格无效，请等待行情更新后重试。"
             )
             return
+        if self._exchange_balance_mode:
+            balance_ok, balance_message = validate_available_balance(
+                side,
+                qty,
+                price,
+                self._quote_available,
+                self._base_available,
+                self._base_asset,
+                self._quote_asset,
+            )
+            if not balance_ok:
+                QMessageBox.warning(
+                    self, "余额不足", balance_message
+                )
+                self.qty_input.setFocus()
+                return
         valid, message = validate_exit_prices(
             side, price, sl, tp, self._max_loss_ratio
         )
@@ -356,16 +526,23 @@ class TradePanel(QWidget):
 
     def set_manual_enabled(self, enabled: bool):
         """锁定下单控件时保留明确说明，避免整栏看似失效。"""
+        self._manual_enabled = enabled
         controls = [
             self.symbol_combo, self._limit_btn, self._market_btn,
             self.price_input, self.qty_input,
-            self.take_profit_input, self.stop_loss_input,
+            self.take_profit_enabled, self.stop_loss_enabled,
             self.buy_btn, self.sell_btn, *self._pct_btns,
         ]
         for control in controls:
             control.setEnabled(enabled)
         if enabled and self._market_btn.isChecked():
             self.price_input.setEnabled(False)
+        self.stop_loss_input.setEnabled(
+            enabled and self.stop_loss_enabled.isChecked()
+        )
+        self.take_profit_input.setEnabled(
+            enabled and self.take_profit_enabled.isChecked()
+        )
         self.mode_hint.setVisible(not enabled)
 
     @staticmethod

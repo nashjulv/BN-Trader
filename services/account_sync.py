@@ -73,17 +73,32 @@ class AccountSyncService(QObject):
                     symbol, side, "LIMIT", quantity=quantity, price=price)
 
             logger.info(f"真实订单: {side} {symbol} x{quantity} @ {price} → {result.get('status')}")
+            actual_quantity = float(
+                result.get("origQty")
+                or result.get("executedQty")
+                or quantity
+            )
+            actual_price = float(result.get("price") or price or 0)
+            if actual_price <= 0 and float(
+                result.get("executedQty", 0) or 0
+            ) > 0:
+                actual_price = (
+                    float(result.get("cummulativeQuoteQty", 0) or 0)
+                    / float(result["executedQty"])
+                )
             return {
                 "symbol": symbol,
                 "side": side,
-                "quantity": quantity,
-                "price": price,
+                "quantity": actual_quantity,
+                "price": actual_price,
                 "status": result.get("status", "UNKNOWN"),
                 "order_id": result.get("orderId", ""),
             }
 
         except Exception as e:
-            msg = f"下单失败: {e}"
+            msg = (
+                f"下单失败 {side} {symbol} 数量 {quantity:g}: {e}"
+            )
             logger.error(msg)
             self.error_occurred.emit(msg)
             return None

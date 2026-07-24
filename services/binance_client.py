@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import time
 import logging
+from decimal import Decimal, InvalidOperation, ROUND_DOWN
 from typing import Dict, List, Optional, Callable
 from urllib.parse import urlencode
 
@@ -18,6 +19,25 @@ import websocket
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def quantize_to_step(value, step) -> Decimal:
+    """按币安步长向下截断，避免浮点精度产生非法参数。"""
+    decimal_value = Decimal(str(value))
+    decimal_step = Decimal(str(step))
+    if decimal_step <= 0:
+        return decimal_value
+    return (
+        (decimal_value / decimal_step).to_integral_value(
+            rounding=ROUND_DOWN
+        )
+        * decimal_step
+    )
+
+
+def decimal_to_api_string(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 class BinanceAPIError(RuntimeError):
@@ -48,6 +68,7 @@ class BinanceClient:
 
         self.session = requests.Session()
         self._update_session_headers()
+        self._symbol_filters: Dict[str, Dict[str, Dict]] = {}
 
         self.ws = None
         self.ws_callbacks: Dict[str, Callable] = {}
@@ -56,7 +77,9 @@ class BinanceClient:
     # ------ key 管理 ------
 
     def _update_session_headers(self):
-        self.session.headers.update({"X-MBX-APIKEY": self.api_key})
+        self.session.headers.pop("X-MBX-APIKEY", None)
+        if self.api_key:
+            self.session.headers.update({"X-MBX-APIKEY": self.api_key})
 
     def reload_keys(self):
         """重新从 Config 加载 API Key（用户在运行时保存后调用）"""
@@ -132,9 +155,10 @@ class BinanceClient:
         result = self._request("GET", "/api/v3/time")
         return result["serverTime"]
 
-    def get_exchange_info(self) -> Dict:
+    def get_exchange_info(self, symbol: str = None) -> Dict:
         """获取交易所信息"""
-        return self._request("GET", "/api/v3/exchangeInfo")
+        params = {"symbol": symbol} if symbol else None
+        return self._request("GET", "/api/v3/exchangeInfo", params)
 
     def get_ticker_24h(self, symbol: str = None) -> Dict:
         """获取24小时价格变动统计"""
@@ -238,6 +262,73 @@ class BinanceClient:
 
     # ------ 订单相关 ------
 
+    def _get_symbol_filters(self, symbol: str) -> Dict[str, Dict]:
+        symbol = symbol.upper()
+        if symbol not in self._symbol_filters:
+            info = self.get_exchange_info(symbol)
+            symbols = info.get("symbols", [])
+            if not symbols:
+                raise ValueError(f"币安未返回 {symbol} 的交易规则")
+            self._symbol_filters[symbol] = {
+                item["filterType"]: item
+                for item in symbols[0].get("filters", [])
+            }
+        return self._symbol_filters[symbol]
+
+    def _normalize_order_values(
+        self,
+        symbol: str,
+        order_type: str,
+        quantity: float = None,
+        price: float = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        filters = self._get_symbol_filters(symbol)
+        normalized_quantity = None
+        normalized_price = None
+
+        if quantity is not None:
+            lot = filters.get(
+                "MARKET_LOT_SIZE" if order_type == "MARKET" else "LOT_SIZE",
+                {},
+            )
+            step = Decimal(str(lot.get("stepSize", "0")))
+            # 部分交易对禁用 MARKET_LOT_SIZE 步长，此时 LOT_SIZE 仍生效。
+            if step <= 0:
+                lot = filters.get("LOT_SIZE", lot)
+                step = Decimal(str(lot.get("stepSize", "0")))
+            try:
+                value = quantize_to_step(quantity, step)
+            except (InvalidOperation, ValueError) as error:
+                raise ValueError(
+                    f"{symbol} 数量格式无效: {quantity}"
+                ) from error
+            minimum = Decimal(str(lot.get("minQty", "0")))
+            maximum = Decimal(str(lot.get("maxQty", "0")))
+            if value <= 0 or (minimum > 0 and value < minimum):
+                raise ValueError(
+                    f"{symbol} 数量 {quantity:g} 按步长 {step} 截断后"
+                    f"低于最小数量 {minimum}"
+                )
+            if maximum > 0 and value > maximum:
+                raise ValueError(
+                    f"{symbol} 数量超过最大值 {maximum}"
+                )
+            normalized_quantity = decimal_to_api_string(value)
+
+        if price is not None and order_type == "LIMIT":
+            price_filter = filters.get("PRICE_FILTER", {})
+            tick = Decimal(str(price_filter.get("tickSize", "0")))
+            value = quantize_to_step(price, tick)
+            minimum = Decimal(str(price_filter.get("minPrice", "0")))
+            maximum = Decimal(str(price_filter.get("maxPrice", "0")))
+            if minimum > 0 and value < minimum:
+                raise ValueError(f"{symbol} 价格低于最小值 {minimum}")
+            if maximum > 0 and value > maximum:
+                raise ValueError(f"{symbol} 价格超过最大值 {maximum}")
+            normalized_price = decimal_to_api_string(value)
+
+        return normalized_quantity, normalized_price
+
     def create_order(self, symbol: str, side: str, order_type: str,
                      quantity: float = None, price: float = None,
                      stop_price: float = None,
@@ -254,22 +345,59 @@ class BinanceClient:
             stop_price: 触发价格（止损单需要）
             time_in_force: 有效时间 GTC/IOC/FOK
         """
+        normalized_quantity, normalized_price = self._normalize_order_values(
+            symbol, order_type, quantity, price
+        )
+        if (
+            normalized_quantity is not None
+            and Decimal(normalized_quantity) != Decimal(str(quantity))
+        ):
+            logger.info(
+                "订单数量按 %s 交易步长调整: %s -> %s",
+                symbol,
+                quantity,
+                normalized_quantity,
+            )
+        if (
+            normalized_price is not None
+            and Decimal(normalized_price) != Decimal(str(price))
+        ):
+            logger.info(
+                "订单价格按 %s 最小变动单位调整: %s -> %s",
+                symbol,
+                price,
+                normalized_price,
+            )
         params = {
             "symbol": symbol,
             "side": side,
             "type": order_type,
         }
 
-        if quantity:
-            params["quantity"] = quantity
-        if price:
-            params["price"] = price
+        if normalized_quantity is not None:
+            params["quantity"] = normalized_quantity
+        if normalized_price is not None:
+            params["price"] = normalized_price
         if stop_price:
             params["stopPrice"] = stop_price
         if order_type == "LIMIT":
             params["timeInForce"] = time_in_force
 
         return self._request("POST", "/api/v3/order", params, signed=True)
+
+    def test_order(self, symbol: str, quote_order_qty: float = 10) -> Dict:
+        """验证当前 Key 的现货下单权限，不会创建真实订单。"""
+        return self._request(
+            "POST",
+            "/api/v3/order/test",
+            {
+                "symbol": symbol,
+                "side": "BUY",
+                "type": "MARKET",
+                "quoteOrderQty": quote_order_qty,
+            },
+            signed=True,
+        )
 
     def cancel_order(self, symbol: str, order_id: str) -> Dict:
         """取消订单"""

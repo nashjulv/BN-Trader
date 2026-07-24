@@ -5,7 +5,8 @@
 
 from PyQt6.QtWidgets import (QWidget, QHBoxLayout, QLabel, QPushButton,
                                QComboBox, QFrame)
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import pyqtSignal, Qt, QSize, QRectF, QPointF
+from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap, QPen
 
 from gui.styles import Theme
 from config import Config
@@ -16,6 +17,7 @@ class PnlBar(QWidget):
     theme_toggled = pyqtSignal(str)
     api_settings_clicked = pyqtSignal()
     symbol_changed = pyqtSignal(str)
+    refresh_requested = pyqtSignal()
 
     def __init__(self):
         super().__init__()
@@ -80,6 +82,16 @@ class PnlBar(QWidget):
         layout.addLayout(col3[0])
 
         layout.addStretch()
+
+        # --- 全局刷新 ---
+        self.refresh_btn = QPushButton()
+        self.refresh_btn.setFixedSize(30, 30)
+        self.refresh_btn.setIconSize(QSize(18, 18))
+        self.refresh_btn.setToolTip("刷新行情、账户并清空手动止盈止损价")
+        self.refresh_btn.setAccessibleName("刷新全部数据")
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.refresh_btn.clicked.connect(self._request_refresh)
+        layout.addWidget(self.refresh_btn)
 
         # --- 主题 ---
         self.theme_btn = QPushButton("暗" if Theme.is_dark() else "明")
@@ -158,6 +170,19 @@ class PnlBar(QWidget):
         sym = text.replace("/", "")
         self.symbol_changed.emit(sym)
 
+    def _request_refresh(self):
+        if self.refresh_btn.isEnabled():
+            self.set_refreshing(True)
+            self.refresh_requested.emit()
+
+    def set_refreshing(self, refreshing: bool):
+        self.refresh_btn.setEnabled(not refreshing)
+        self.refresh_btn.setToolTip(
+            "正在刷新行情与账户…"
+            if refreshing else
+            "刷新行情、账户并清空手动止盈止损价"
+        )
+
     def set_global_ready(self, ready: bool):
         pass
 
@@ -174,10 +199,39 @@ class PnlBar(QWidget):
         self.theme_btn.setStyleSheet(
             f"background:transparent; border:1px solid {t['border']}; "
             f"border-radius:4px; font-size:12px; padding:0;")
+        self.refresh_btn.setIcon(self._refresh_icon(t["text_secondary"]))
+        self.refresh_btn.setStyleSheet(
+            f"QPushButton {{ background:transparent; "
+            f"border:1px solid {t['border']}; border-radius:4px; padding:0; }}"
+            f"QPushButton:hover {{ background:{t['bg_hover']}; "
+            f"border-color:{t['hover_border']}; }}"
+            f"QPushButton:pressed {{ background:{t['bg_hover']}; }}"
+            f"QPushButton:disabled {{ background:transparent; "
+            f"border-color:{t['divider']}; }}"
+        )
         for sep in self.findChildren(QFrame, "sep"):
             sep.setStyleSheet(f"background:{t['divider']}; border:none;")
         self._update_mode_btn()
         self.set_api_status(self._api_ok)
+
+    @staticmethod
+    def _refresh_icon(color: str) -> QIcon:
+        """绘制与侧栏一致的线性刷新图标。"""
+        pixmap = QPixmap(20, 20)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(color))
+        pen.setWidthF(1.6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(QRectF(3, 3, 14, 14), 35 * 16, 285 * 16)
+        painter.drawLine(QPointF(3.7, 5.8), QPointF(3.4, 2.8))
+        painter.drawLine(QPointF(3.4, 2.8), QPointF(6.4, 3.6))
+        painter.end()
+        return QIcon(pixmap)
 
     # ------- 数据更新 -------
 
@@ -225,3 +279,13 @@ class PnlBar(QWidget):
                 f"color:{t['text_secondary']}; border:1px solid {t['border']}; "
                 f"border-radius:4px; background:transparent; "
                 f"font-size:12px; padding:4px 10px;")
+
+    def set_api_connecting(self):
+        self._api_ok = False
+        t = Theme.colors()
+        self.api_btn.setText("… API")
+        self.api_btn.setStyleSheet(
+            f"color:{t['text_secondary']}; border:1px solid {t['border']}; "
+            f"border-radius:4px; background:{t['bg_hover']}; "
+            f"font-size:12px; padding:4px 10px;"
+        )

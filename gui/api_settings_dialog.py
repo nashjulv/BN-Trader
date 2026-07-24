@@ -15,7 +15,7 @@ import requests
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QFrame, QMessageBox,
                                QScrollArea, QGridLayout, QApplication)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 
 from gui.styles import Theme
 from config import Config
@@ -39,8 +39,43 @@ def save_api_settings(api_key: str, secret_key: str, testnet: bool):
     }, sensitive=True)
 
 
+def clear_persisted_api_settings():
+    """清除所有已知凭据文件，同时保留空 .env 作为旧版回退阻断标记。"""
+    paths = [
+        SETTINGS_FILE,
+        SETTINGS_FILE.with_suffix(SETTINGS_FILE.suffix + ".bak"),
+        LEGACY_SETTINGS_FILE,
+        LEGACY_SETTINGS_FILE.with_suffix(
+            LEGACY_SETTINGS_FILE.suffix + ".bak"
+        ),
+    ]
+    for path in paths:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    env = Config.PREFERENCES_DIR / ".env"
+    lines = env.read_text(encoding="utf-8").splitlines() if env.exists() else []
+    remaining = [
+        line for line in lines
+        if not line.startswith(("BINANCE_API_KEY=", "BINANCE_SECRET_KEY="))
+    ]
+    env.parent.mkdir(parents=True, exist_ok=True)
+    env.write_text(
+        "\n".join(remaining) + ("\n" if remaining else ""),
+        encoding="utf-8",
+    )
+    try:
+        env.chmod(0o600)
+    except OSError:
+        pass
+
+
 class ApiSettingsPage(QWidget):
     """嵌入主窗口的 API 设置页（也可用作对话框内容）"""
+
+    credentials_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -309,19 +344,26 @@ class ApiSettingsPage(QWidget):
         save_api_settings(ak, sk, testnet=False)
         self._write_env(ak, sk)
         self.saved = True
+        self.credentials_changed.emit(True)
         QMessageBox.information(self, "成功", "API 配置已保存！")
 
     def _delete_api(self):
         r = QMessageBox.question(self, "确认", "确定删除本地 API 配置？")
         if r != QMessageBox.StandardButton.Yes:
             return
+        old_key = self.key_input.text()
+        old_secret = self.secret_input.text()
+        clipboard = QApplication.clipboard()
+        if clipboard.text() in (old_key, old_secret):
+            clipboard.clear()
         self.key_input.clear()
         self.secret_input.clear()
-        if SETTINGS_FILE.exists():
-            SETTINGS_FILE.unlink()
-        self._remove_env_keys()
+        clear_persisted_api_settings()
+        Config.reload_api_keys()
+        self.saved = False
         self._connected = False
         self._update_status_badge()
+        self.credentials_changed.emit(False)
         QMessageBox.information(self, "已删除", "API 配置已清除")
 
     def _test_connection(self):

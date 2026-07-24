@@ -1,4 +1,11 @@
-from services.binance_client import BinanceAPIError, BinanceClient
+from decimal import Decimal
+
+from services.binance_client import (
+    BinanceAPIError,
+    BinanceClient,
+    quantize_to_step,
+)
+from config import Config
 
 
 class FakeResponse:
@@ -10,6 +17,46 @@ class FakeResponse:
 
     def json(self):
         return self._payload
+
+
+def cache_btc_filters(client):
+    client._symbol_filters["BTCUSDT"] = {
+        "LOT_SIZE": {
+            "minQty": "0.00001",
+            "maxQty": "9000",
+            "stepSize": "0.00001",
+        },
+        "MARKET_LOT_SIZE": {
+            "minQty": "0",
+            "maxQty": "9000",
+            "stepSize": "0",
+        },
+        "PRICE_FILTER": {
+            "minPrice": "0.01",
+            "maxPrice": "1000000",
+            "tickSize": "0.01",
+        },
+    }
+
+
+def cache_sol_filters(client):
+    client._symbol_filters["SOLUSDT"] = {
+        "LOT_SIZE": {
+            "minQty": "0.001",
+            "maxQty": "9000",
+            "stepSize": "0.001",
+        },
+        "MARKET_LOT_SIZE": {
+            "minQty": "0",
+            "maxQty": "9000",
+            "stepSize": "0",
+        },
+        "PRICE_FILTER": {
+            "minPrice": "0.01",
+            "maxPrice": "1000000",
+            "tickSize": "0.01",
+        },
+    }
 
 
 def test_signed_request_reloads_credentials_and_retries_once(monkeypatch):
@@ -40,6 +87,7 @@ def test_signed_request_reloads_credentials_and_retries_once(monkeypatch):
 
 def test_api_error_preserves_binance_code_without_signed_url(monkeypatch):
     client = BinanceClient()
+    cache_btc_filters(client)
     response = FakeResponse(
         400, {"code": -1013, "msg": "Filter failure: LOT_SIZE"}
     )
@@ -62,6 +110,7 @@ def test_api_error_preserves_binance_code_without_signed_url(monkeypatch):
 
 def test_symbol_whitelist_error_has_chinese_guidance(monkeypatch):
     client = BinanceClient()
+    cache_btc_filters(client)
     response = FakeResponse(
         400, {"code": -2010, "msg": "Symbol not whitelisted for API key."}
     )
@@ -79,3 +128,85 @@ def test_symbol_whitelist_error_has_chinese_guidance(monkeypatch):
 
     assert "交易对未加入" in message
     assert "-2010" in message
+
+
+def test_reload_removes_api_header_when_credentials_are_cleared(monkeypatch):
+    client = BinanceClient()
+    client.session.headers["X-MBX-APIKEY"] = "stale-key"
+
+    def clear_config():
+        Config.BINANCE_API_KEY = ""
+        Config.BINANCE_SECRET_KEY = ""
+
+    monkeypatch.setattr(Config, "reload_api_keys", clear_config)
+    client.reload_keys()
+
+    assert client.api_key == ""
+    assert client.secret_key == ""
+    assert "X-MBX-APIKEY" not in client.session.headers
+
+
+def test_order_uses_non_trading_test_endpoint(monkeypatch):
+    client = BinanceClient()
+    captured = {}
+
+    def fake_post(url, data, timeout):
+        captured["url"] = url
+        captured["data"] = dict(data)
+        return FakeResponse(200, {})
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+
+    assert client.test_order("BTCUSDT", quote_order_qty=10) == {}
+    assert captured["url"].endswith("/api/v3/order/test")
+    assert captured["data"]["quoteOrderQty"] == 10
+    assert captured["data"]["type"] == "MARKET"
+
+
+def test_quantity_is_floored_to_exchange_step():
+    assert quantize_to_step("0.265217", "0.001") == Decimal("0.265")
+    assert quantize_to_step("0.265041", "0.001") == Decimal("0.265")
+
+
+def test_sol_market_order_uses_lot_size_when_market_step_is_disabled(
+    monkeypatch,
+):
+    client = BinanceClient()
+    cache_sol_filters(client)
+    captured = {}
+
+    def fake_post(url, data, timeout):
+        captured["data"] = dict(data)
+        return FakeResponse(200, {"orderId": 1, "origQty": data["quantity"]})
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+
+    result = client.create_order(
+        "SOLUSDT", "BUY", "MARKET", quantity=0.265217
+    )
+
+    assert captured["data"]["quantity"] == "0.265"
+    assert result["origQty"] == "0.265"
+
+
+def test_sol_limit_order_normalizes_quantity_and_price(monkeypatch):
+    client = BinanceClient()
+    cache_sol_filters(client)
+    captured = {}
+
+    def fake_post(url, data, timeout):
+        captured["data"] = dict(data)
+        return FakeResponse(200, {"orderId": 1})
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+
+    client.create_order(
+        "SOLUSDT",
+        "BUY",
+        "LIMIT",
+        quantity=0.265217,
+        price=123.456,
+    )
+
+    assert captured["data"]["quantity"] == "0.265"
+    assert captured["data"]["price"] == "123.45"

@@ -1,4 +1,4 @@
-from gui.trade_panel import validate_exit_prices
+from gui.trade_panel import validate_available_balance, validate_exit_prices
 
 
 def test_buy_exit_prices_use_absolute_prices():
@@ -26,3 +26,44 @@ def test_sell_exit_price_direction_is_checked():
     )
     assert not valid
     assert "高于入场价" in message
+
+
+def test_buy_is_checked_against_real_quote_balance():
+    valid, message = validate_available_balance(
+        "BUY",
+        quantity=0.02,
+        price=65_000,
+        quote_available=935.25,
+        base_available=0.000999,
+    )
+
+    assert not valid
+    assert "1,300.0000 USDT" in message
+    assert "935.2500 USDT" in message
+
+
+def test_sell_is_checked_against_real_base_balance():
+    valid, message = validate_available_balance(
+        "SELL",
+        quantity=0.001,
+        price=65_000,
+        quote_available=935.25,
+        base_available=0.000999,
+    )
+
+    assert not valid
+    assert "BTC 余额不足" in message
+    assert "0.000999 BTC" in message
+
+
+def test_order_within_real_balance_is_allowed():
+    valid, message = validate_available_balance(
+        "BUY",
+        quantity=0.001,
+        price=65_000,
+        quote_available=935.25,
+        base_available=0.000999,
+    )
+
+    assert valid
+    assert message == ""

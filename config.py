@@ -75,14 +75,28 @@ _env_paths = [
     _legacy_env,
     USER_DATA_DIR / ".env",
 ]
-for _p in _env_paths:
-    if _p.exists():
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(_p)
-        except ImportError:
-            pass
-        break
+
+
+def _active_env_path():
+    """只返回最高优先级凭据文件，禁止旧文件再次覆盖新凭据。"""
+    seen = set()
+    for path in _env_paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if path.is_file():
+            return path
+    return None
+
+
+_initial_env = _active_env_path()
+if _initial_env:
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_initial_env)
+    except ImportError:
+        pass
 
 
 class Config:
@@ -113,9 +127,11 @@ class Config:
     def reload_api_keys(cls):
         """动态重载 API Key（用户在运行时保存后调用）"""
         from dotenv import load_dotenv
-        for _p in _env_paths:
-            if _p.exists():
-                load_dotenv(_p, override=True)
+        os.environ.pop("BINANCE_API_KEY", None)
+        os.environ.pop("BINANCE_SECRET_KEY", None)
+        env_path = _active_env_path()
+        if env_path:
+            load_dotenv(env_path, override=True)
         cls.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
         cls.BINANCE_SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
 
