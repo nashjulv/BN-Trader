@@ -15,6 +15,7 @@ from gui.styles import Theme, SCENE_COLORS, SCENE_INFO
 
 # 雷达图五个维度的顺序（顺时针，从顶部开始）
 _RADAR_KEYS  = ["TRENDING", "BREAKOUT", "EXTREME", "REVERSAL", "RANGING"]
+_BUTTON_KEYS = ["TRENDING", "RANGING", "BREAKOUT", "REVERSAL", "EXTREME"]
 _RADAR_NAMES = {k: SCENE_INFO[k]["name"] for k in _RADAR_KEYS}
 _RADAR_COLORS = {k: QColor(SCENE_COLORS[k]) for k in _RADAR_KEYS}
 
@@ -27,12 +28,18 @@ class _RadarWidget(QWidget):
         self._scores: Dict[str, float] = {}
         self._dominant: str = ""
         self.setMinimumSize(180, 180)
+        self.setAccessibleName("行情场景雷达图")
         self.setSizePolicy(QSizePolicy.Policy.Expanding,
                            QSizePolicy.Policy.Expanding)
 
     def set_scores(self, scores: Dict[str, float], dominant: str):
         self._scores = dict(scores)
         self._dominant = dominant
+        summary = "，".join(
+            f"{_RADAR_NAMES[key]} {self._scores.get(key, 0):.0%}"
+            for key in _RADAR_KEYS
+        )
+        self.setAccessibleDescription(summary)
         self.update()
 
     # ---------- 绘制 ----------
@@ -49,7 +56,15 @@ class _RadarWidget(QWidget):
         w = self.width()
         h = self.height()
         cx, cy = w / 2, h / 2
-        radius = min(w, h) / 2 - 36  # 留出标签空间
+        label_w = max(58.0, min(76.0, w * 0.34))
+        label_h = 34.0
+        radius = max(
+            24.0,
+            min(
+                (w - label_w * 0.9) / 2,
+                (h - label_h * 2) / 2,
+            ) - 4,
+        )
 
         n = len(_RADAR_KEYS)
         vertices = self._polygon(cx, cy, radius, n)
@@ -70,7 +85,7 @@ class _RadarWidget(QWidget):
 
         # ---- 数据区域（半透明填充） ----
         data_pts = [QPointF(cx + radius * self._scores.get(k, 0) * math.cos(a),
-                             cy - radius * self._scores.get(k, 0) * math.sin(a))
+                             cy + radius * self._scores.get(k, 0) * math.sin(a))
                      for k, a in self._angles(cx, cy, radius, n)]
         data_poly = QPolygonF(data_pts)
 
@@ -94,55 +109,76 @@ class _RadarWidget(QWidget):
         font.setWeight(QFont.Weight.Medium if not dark else QFont.Weight.Normal)
         p.setFont(font)
 
-        for key, (vx, vy) in zip(_RADAR_KEYS, vertices):
+        for key in _RADAR_KEYS:
             score = self._scores.get(key, 0)
             label = _RADAR_NAMES.get(key, key)
             text = f"{label}\n{score:.0%}"
-
-            # 根据顶点相对圆心的位置决定文字对齐
-            dx, dy = vx - cx, -(vy - cy)
             p.setPen(QPen(QColor(t["text_secondary"]), 1))
-            self._draw_label(p, QPointF(vx, vy), dx, dy, text)
+            self._draw_label(p, key, w, h, label_w, label_h, text)
 
         p.end()
 
-    def _draw_label(self, painter: QPainter, pt: QPointF,
-                     dx: float, dy: float, text: str):
-        """在顶点外侧绘制标签，自动避开图形。"""
-        lines = text.split("\n")
-        fm = painter.fontMetrics()
-        line_h = fm.height()
-        total_h = line_h * len(lines)
-        max_w = max(fm.horizontalAdvance(line) for line in lines)
-
-        offset = 16
-        nx = dx / math.hypot(dx, dy) if dx or dy else 0
-        ny = dy / math.hypot(dx, dy) if dx or dy else -1
-
-        # 文字框左上角
-        bx = pt.x() + nx * offset
-        by = pt.y() + ny * offset
-
-        # 水平对齐
-        if abs(nx) < 0.3:
-            bx -= max_w / 2
-        elif nx > 0:
-            pass
-        else:
-            bx -= max_w
-
-        # 垂直对齐
-        if abs(ny) < 0.3:
-            by -= total_h / 2
-        elif ny > 0:
-            pass
-        else:
-            by -= total_h
-
+    def _draw_label(self, painter: QPainter, key: str,
+                    width: float, height: float,
+                    label_width: float, label_height: float,
+                    text: str):
+        """将五个维度固定在顶部和四角，窗口缩放时不随顶点漂移。"""
+        rect, alignment = self._label_slot(
+            key, width, height, label_width, label_height
+        )
         painter.setPen(QPen(QColor(Theme.c("text_secondary")), 1))
-        for i, line in enumerate(lines):
-            painter.drawText(QRectF(bx, by + i * line_h, max_w + 8, line_h),
-                            Qt.AlignmentFlag.AlignCenter, line)
+        painter.drawText(
+            rect,
+            alignment | Qt.AlignmentFlag.AlignVCenter,
+            text,
+        )
+
+    @staticmethod
+    def _label_slot(key: str, width: float, height: float,
+                    label_width: float = 64,
+                    label_height: float = 34):
+        """返回稳定的标签矩形与对齐方式，便于布局测试。"""
+        inset = 2.0
+        top_y = max(label_height - 4, height * 0.18)
+        bottom_y = height - label_height - inset
+        slots = {
+            "TRENDING": (
+                QRectF(
+                    (width - label_width) / 2,
+                    inset,
+                    label_width,
+                    label_height,
+                ),
+                Qt.AlignmentFlag.AlignHCenter,
+            ),
+            "RANGING": (
+                QRectF(inset, top_y, label_width, label_height),
+                Qt.AlignmentFlag.AlignLeft,
+            ),
+            "BREAKOUT": (
+                QRectF(
+                    width - label_width - inset,
+                    top_y,
+                    label_width,
+                    label_height,
+                ),
+                Qt.AlignmentFlag.AlignRight,
+            ),
+            "REVERSAL": (
+                QRectF(inset, bottom_y, label_width, label_height),
+                Qt.AlignmentFlag.AlignLeft,
+            ),
+            "EXTREME": (
+                QRectF(
+                    width - label_width - inset,
+                    bottom_y,
+                    label_width,
+                    label_height,
+                ),
+                Qt.AlignmentFlag.AlignRight,
+            ),
+        }
+        return slots[key]
 
     # ---------- 几何工具 ----------
 
@@ -151,7 +187,7 @@ class _RadarWidget(QWidget):
         pts = []
         for i in range(n):
             angle = math.radians(-90 + i * 360 / n)
-            pts.append((cx + r * math.cos(angle), cy - r * math.sin(angle)))
+            pts.append((cx + r * math.cos(angle), cy + r * math.sin(angle)))
         return pts
 
     def _angles(self, cx, cy, r, n):
@@ -213,13 +249,14 @@ class ScenePanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
         self.scene_buttons = {}
-        for st in _RADAR_KEYS:
+        for st in _BUTTON_KEYS:
             info = SCENE_INFO[st]
             btn = QPushButton(info["name"][:2])
             btn.setCheckable(True)
             btn.setFixedHeight(26)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(info["name"])
+            btn.setAccessibleName(f"切换到{info['name']}")
             btn.clicked.connect(lambda _, s=st: self._on_scene_clicked(s))
             self.scene_buttons[st] = btn
             btn_row.addWidget(btn)
