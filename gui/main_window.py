@@ -608,6 +608,7 @@ class MainWindow(QMainWindow):
                     "price_position": scene.price_position,
                     "is_breakout": scene.is_breakout,
                     "is_divergence": scene.is_divergence,
+                    "scene_scores": scene.scene_scores,
                 })
                 self._status_scene.setText(
                     f"{scene.type} ({scene.confidence:.0%})")

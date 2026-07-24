@@ -32,6 +32,7 @@ class Scene:
     is_divergence: bool  # 是否背离
     description: str  # 场景描述
     position_ratio: float  # 建议仓位比例
+    scene_scores: Dict[str, float] = None  # 五种场景的原始评分
 
 
 class SceneDetector:
@@ -123,7 +124,8 @@ class SceneDetector:
             is_breakout=is_breakout,
             is_divergence=is_divergence,
             description=self.SCENE_TYPES[best_scene]["description"],
-            position_ratio=self.SCENE_TYPES[best_scene]["position_ratio"] * confidence
+            position_ratio=self.SCENE_TYPES[best_scene]["position_ratio"] * confidence,
+            scene_scores=scores,
         )
 
         self.last_scene = scene
@@ -339,7 +341,8 @@ class SceneDetector:
             is_breakout=False,
             is_divergence=False,
             description="数据不足，默认震荡行情",
-            position_ratio=0.1
+            position_ratio=0.1,
+            scene_scores={k: 0.5 for k in self.SCENE_TYPES},
         )
 
     def get_scene_trend(self) -> str:
